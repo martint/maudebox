@@ -83,13 +83,13 @@ The host's `commit.gpgsign = true` paired with 1Password's macOS-only ssh-sign p
 
 ### Claude Code config sharing
 
-`maudebox` mounts a shared named volume `claude-auth` at `/root/.claude` so login state persists across runs and across worktrees. On top of that volume, specific files from the host's `~/.claude/` (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) are bind-mounted read-only — picking up the user's global Claude config without dragging in host-path-keyed state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`).
+`maudebox` mounts a shared named volume `maudebox-claude` at `/root/.claude` so login state persists across runs and across worktrees. On top of that volume, specific files from the host's `~/.claude/` (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) are bind-mounted read-only — picking up the user's global Claude config without dragging in host-path-keyed state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`).
 
 `~/.claude.json` (login token + project list) lives outside `~/.claude/` on the host, so it can't be picked up by the volume mount. The entrypoint instead symlinks `~/.claude.json → ~/.claude/state.json` so writes follow into the persistent volume. The user must log into Claude Code once inside any container; subsequent containers share that login.
 
 ### Per-worktree volume naming
 
-`maudebox` derives the upper-layer volume name as `m2-upper-<basename>-<sha256-prefix-of-fullpath>`. The basename keeps it human-readable; the hash prevents collisions when two worktrees share a basename. `--clean` removes only that one volume.
+`maudebox` derives the upper-layer volume name as `maudebox-overlay-<basename>-<sha256-prefix-of-fullpath>`. The basename keeps it human-readable; the hash prevents collisions when two worktrees share a basename. `--clean` removes only that one volume.
 
 ### Multi-arch build
 

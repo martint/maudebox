@@ -84,10 +84,10 @@ VCS_BASE="$(detect_vcs_base "$PROJECT_DIR")"
 
 # ── per-worktree volume name ──────────────────────────────────────────────────
 # Combines the directory basename (human-readable) with a short hash of the
-# full path (collision-proof), e.g. m2-upper-myproject-a3f8c21b
+# full path (collision-proof), e.g. maudebox-overlay-myproject-a3f8c21b
 DIR_NAME="$(basename "$PROJECT_DIR")"
 PATH_HASH="$(echo "$PROJECT_DIR" | sha256sum | cut -c1-8)"
-UPPER_VOLUME="m2-upper-${DIR_NAME}-${PATH_HASH}"
+UPPER_VOLUME="maudebox-overlay-${DIR_NAME}-${PATH_HASH}"
 
 # ── --clean ───────────────────────────────────────────────────────────────────
 if $CLEAN; then
@@ -101,13 +101,13 @@ if $CLEAN; then
 fi
 
 # ── Claude config: persistent volume + read-only host overlays ────────────────
-# claude-auth holds writable state (login token, todos, plugin caches) and is
-# shared across worktrees so a single `claude` login covers every container.
+# maudebox-claude holds writable state (login token, todos, plugin caches) and
+# is shared across worktrees so a single `claude` login covers every container.
 # Specific files from the host's ~/.claude/ are bind-mounted read-only on top
 # so global instructions, settings, agents, commands, and plugin definitions
 # come from the host. Items that are keyed to host paths (projects/, todos/,
 # statsig/, shell-snapshots/) are intentionally left out.
-CLAUDE_AUTH_VOLUME="claude-auth"
+CLAUDE_AUTH_VOLUME="maudebox-claude"
 docker volume create "$CLAUDE_AUTH_VOLUME" > /dev/null
 
 CLAUDE_MOUNTS=( -v "${CLAUDE_AUTH_VOLUME}:/root/.claude" )

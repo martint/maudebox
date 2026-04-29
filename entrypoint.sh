@@ -7,7 +7,7 @@
 #   --cap-add SYS_ADMIN  (or --privileged)
 #   -v ~/.m2:/m2-host:ro
 #   -v <per-worktree>:/m2-upper
-#   -v claude-auth:/root/.claude   (optional, persists Claude login)
+#   -v maudebox-claude:/root/.claude   (optional, persists Claude login)
 #   -v <project>:<project>          (bind-mount at the host path)
 #   HOST_PROJECT_DIR=<project>      (env var; entrypoint adds a /root/<basename> symlink and cd's there)
 #

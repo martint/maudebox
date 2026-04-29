@@ -75,7 +75,7 @@ The container mounts an overlayfs at `~/.m2` with three layers:
 | Layer    | Source                                      | Mode |
 | -------- | ------------------------------------------- | ---- |
 | lower    | host's `~/.m2`                              | ro   |
-| upper    | per-worktree Docker volume (`m2-upper-…`)   | rw   |
+| upper    | per-worktree Docker volume (`maudebox-overlay-…`) | rw   |
 | workdir  | sibling subdir in the same volume           | rw   |
 
 Effect: builds inside the container see all the artifacts already cached on the host, but anything they download or `install` lands in a worktree-scoped volume. Concurrent containers for different worktrees don't collide. The host's `~/.m2` is never mutated.
@@ -83,14 +83,14 @@ Effect: builds inside the container see all the artifacts already cached on the 
 The per-worktree volume name is derived from the basename of the project directory plus a SHA-256 prefix of its full path:
 
 ```
-m2-upper-<basename>-<8-char-hash>
+maudebox-overlay-<basename>-<8-char-hash>
 ```
 
 `maudebox --clean <dir>` removes only that one volume.
 
 ### Claude Code config
 
-A shared Docker volume `claude-auth` is mounted at `~/.claude` inside the container. On top of that volume, the following items from the host's `~/.claude/` are bind-mounted read-only (only those that actually exist on the host):
+A shared Docker volume `maudebox-claude` is mounted at `~/.claude` inside the container. On top of that volume, the following items from the host's `~/.claude/` are bind-mounted read-only (only those that actually exist on the host):
 
 - `CLAUDE.md` — your global instructions
 - `settings.json`
@@ -118,7 +118,7 @@ Everything lives under `/root`: the Maven cache (`/root/.m2`), the Claude config
 
 ```sh
 maudebox --clean /path/to/project   # remove that worktree's Maven overlay
-docker volume rm claude-auth        # forget the persistent Claude login
+docker volume rm maudebox-claude    # forget the persistent Claude login
 docker rmi maudebox                # remove the image
 ```
 
