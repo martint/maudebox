@@ -15,6 +15,12 @@ ARG JJ_VERSION=0.34.0
 # out of the overlay so its small writes don't trigger pointless copy-up.
 ENV MVND_DAEMON_STORAGE=/root/.mvnd
 
+# `less` parses $LESS in addition to argv, so this makes any `less` invocation
+# (including pagers hard-coded as `less -FX` in the user's mounted jj/git
+# config) pass ANSI colors through instead of rendering them as literal
+# `ESC[…m` text.
+ENV LESS=-R
+
 # Host gitconfig is bind-mounted read-only by the maudebox wrapper, so the user's identity
 # and aliases work inside the container. But the host's commit.gpgsign=true
 # (with 1Password's macOS-only ssh-sign program) would auto-fail every commit.
