@@ -22,12 +22,41 @@ set -euo pipefail
 IMAGE_NAME="maudebox"
 CLEAN=false
 
+usage() {
+    cat <<'EOF'
+Usage: maudebox [--clean] [--tag TAG] [project-dir] [command...]
+
+Launch a maudebox container for a host project directory. The project (and
+its base repo, if it's a jj workspace or git worktree) is bind-mounted at
+its host path inside the container so VCS metadata still resolves. Maven's
+local repo is layered: the host's ~/.m2 is exposed read-only beneath a
+per-worktree overlay volume so writes stay isolated per worktree.
+
+Options:
+  --clean       remove the overlay volume for this worktree and exit
+  --tag TAG     image tag to run (default: maudebox)
+  -h, --help    show this help and exit
+
+Arguments:
+  project-dir   host directory to mount (default: current directory)
+  command...    command to run inside the container (default: interactive shell)
+
+Examples:
+  maudebox                               # interactive shell in current dir
+  maudebox /path/to/myproject            # interactive shell, specific project
+  maudebox . mvnd verify                 # run a build
+  maudebox . claude                      # start Claude Code
+  maudebox --clean /path/to/myproject    # delete that worktree's overlay volume
+EOF
+}
+
 # ── parse flags ───────────────────────────────────────────────────────────────
-while [[ "${1:-}" == --* ]]; do
+while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
     case "$1" in
+        -h|--help) usage; exit 0 ;;
         --clean) CLEAN=true;        shift ;;
         --tag)   IMAGE_NAME="$2";   shift 2 ;;
-        *) echo "Unknown option: $1" >&2; exit 1 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
 
