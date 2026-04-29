@@ -1,0 +1,159 @@
+#!/bin/bash
+# maudebox – launch a maudebox container for a given worktree
+#
+# Requires the image to already be built via build.sh.
+#
+# Usage:
+#   maudebox [--clean] [--tag TAG] [project-dir] [command...]
+#
+# Options:
+#   --clean   remove the overlay volume for this worktree and exit
+#   --tag     image tag to run (default: maudebox)
+#
+# Examples:
+#   maudebox                               # interactive shell in current dir
+#   maudebox /path/to/myproject            # interactive shell, specific project
+#   maudebox . mvnd verify                 # run a build
+#   maudebox . claude                      # start Claude Code
+#   maudebox --clean /path/to/myproject    # delete that worktree's overlay volume
+
+set -euo pipefail
+
+IMAGE_NAME="maudebox"
+CLEAN=false
+
+# ── parse flags ───────────────────────────────────────────────────────────────
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --clean) CLEAN=true;        shift ;;
+        --tag)   IMAGE_NAME="$2";   shift 2 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+PROJECT_DIR="$(realpath "${1:-.}")"
+shift || true   # remaining args become the container command (default: bash)
+
+# ── detect base repo for jj workspaces / git worktrees ────────────────────────
+# A jj workspace stores the absolute or relative path to the *main* repo's
+# .jj/repo directory inside <workspace>/.jj/repo (a regular file). A git
+# worktree stores `gitdir: <abs-path>` in <worktree>/.git (also a regular
+# file). In both cases the worktree's own metadata references an absolute
+# host path that won't exist inside the container unless we bind-mount the
+# base repo at the same path. detect_vcs_base prints that base path (the
+# main repo's working tree, not its .jj/.git dir) or nothing if the project
+# isn't a worktree/workspace.
+detect_vcs_base() {
+    local dir="$1"
+    [ -d "$dir" ] || return 0
+
+    if [ -f "$dir/.jj/repo" ]; then
+        local content target base
+        content="$(cat "$dir/.jj/repo")"
+        content="${content%$'\n'}"
+        if [[ "$content" == /* ]]; then
+            target="$content"
+        else
+            target="$(cd "$dir/.jj" 2>/dev/null && readlink -f "$content" 2>/dev/null)" || true
+        fi
+        # target is <main>/.jj/repo; the working tree is two levels up.
+        base="${target%/.jj/repo}"
+        if [ -n "$target" ] && [ "$base" != "$target" ] && [ "$base" != "$dir" ]; then
+            echo "$base"
+            return
+        fi
+    fi
+
+    if [ -f "$dir/.git" ]; then
+        local gitdir base
+        gitdir="$(grep -m1 '^gitdir:' "$dir/.git" | sed 's|^gitdir: *||')"
+        if [[ "$gitdir" != /* ]]; then
+            gitdir="$(cd "$dir" 2>/dev/null && readlink -f "$gitdir" 2>/dev/null)" || true
+        fi
+        # gitdir is typically <main>/.git/worktrees/<name>, sometimes <main>/.git.
+        base="${gitdir%/.git/worktrees/*}"
+        [ "$base" = "$gitdir" ] && base="${gitdir%/.git}"
+        if [ -n "$gitdir" ] && [ "$base" != "$gitdir" ] && [ "$base" != "$dir" ]; then
+            echo "$base"
+            return
+        fi
+    fi
+}
+
+VCS_BASE="$(detect_vcs_base "$PROJECT_DIR")"
+
+# ── per-worktree volume name ──────────────────────────────────────────────────
+# Combines the directory basename (human-readable) with a short hash of the
+# full path (collision-proof), e.g. m2-upper-myproject-a3f8c21b
+DIR_NAME="$(basename "$PROJECT_DIR")"
+PATH_HASH="$(echo "$PROJECT_DIR" | sha256sum | cut -c1-8)"
+UPPER_VOLUME="m2-upper-${DIR_NAME}-${PATH_HASH}"
+
+# ── --clean ───────────────────────────────────────────────────────────────────
+if $CLEAN; then
+    if docker volume inspect "$UPPER_VOLUME" &>/dev/null; then
+        docker volume rm "$UPPER_VOLUME"
+        echo "Removed volume: $UPPER_VOLUME"
+    else
+        echo "No volume found for this worktree: $UPPER_VOLUME"
+    fi
+    exit 0
+fi
+
+# ── Claude config: persistent volume + read-only host overlays ────────────────
+# claude-auth holds writable state (login token, todos, plugin caches) and is
+# shared across worktrees so a single `claude` login covers every container.
+# Specific files from the host's ~/.claude/ are bind-mounted read-only on top
+# so global instructions, settings, agents, commands, and plugin definitions
+# come from the host. Items that are keyed to host paths (projects/, todos/,
+# statsig/, shell-snapshots/) are intentionally left out.
+CLAUDE_AUTH_VOLUME="claude-auth"
+docker volume create "$CLAUDE_AUTH_VOLUME" > /dev/null
+
+CLAUDE_MOUNTS=( -v "${CLAUDE_AUTH_VOLUME}:/root/.claude" )
+HOST_CLAUDE_DIR="$HOME/.claude"
+for path in CLAUDE.md settings.json agents commands plugins; do
+    if [ -e "$HOST_CLAUDE_DIR/$path" ]; then
+        CLAUDE_MOUNTS+=( -v "$HOST_CLAUDE_DIR/$path:/root/.claude/$path:ro" )
+    fi
+done
+
+# ── host git/jj config (read-only) ────────────────────────────────────────────
+# Pick up the user's identity, aliases, ignore rules, and jj revset aliases
+# (e.g. closest_bookmark) without importing host-local state. We deliberately
+# skip ~/.config/jj/repos/ (per-repo cache, host paths) and credential/SSH
+# files. Container-incompatible settings like commit.gpgsign are forced off
+# in the Dockerfile via GIT_CONFIG_* env vars.
+VCS_CONFIG_MOUNTS=()
+[ -e "$HOME/.gitconfig" ]               && VCS_CONFIG_MOUNTS+=( -v "$HOME/.gitconfig:/root/.gitconfig:ro" )
+[ -d "$HOME/.config/git" ]              && VCS_CONFIG_MOUNTS+=( -v "$HOME/.config/git:/root/.config/git:ro" )
+[ -e "$HOME/.config/jj/config.toml" ]   && VCS_CONFIG_MOUNTS+=( -v "$HOME/.config/jj/config.toml:/root/.config/jj/config.toml:ro" )
+
+# ── run ───────────────────────────────────────────────────────────────────────
+docker volume create "$UPPER_VOLUME" > /dev/null
+
+# Mount the project (and its base repo, if it's a jj/git worktree) at their
+# host paths inside the container so absolute path references in the worktree
+# metadata still resolve. The entrypoint adds a /root/<basename> symlink to
+# the project for short cd's.
+PROJECT_MOUNTS=( -v "${PROJECT_DIR}:${PROJECT_DIR}" )
+if [ -n "$VCS_BASE" ] && [ "$VCS_BASE" != "$PROJECT_DIR" ]; then
+    PROJECT_MOUNTS+=( -v "${VCS_BASE}:${VCS_BASE}" )
+fi
+
+echo "Image    : $IMAGE_NAME"
+echo "Worktree : $PROJECT_DIR"
+[ -n "$VCS_BASE" ] && [ "$VCS_BASE" != "$PROJECT_DIR" ] && echo "VCS base : $VCS_BASE"
+echo "Volume   : $UPPER_VOLUME"
+
+docker run --rm -it \
+    --cap-add SYS_ADMIN \
+    --security-opt apparmor=unconfined \
+    -e "HOST_PROJECT_DIR=$PROJECT_DIR" \
+    -v "$HOME/.m2:/m2-host:ro" \
+    -v "${UPPER_VOLUME}:/m2-upper" \
+    "${PROJECT_MOUNTS[@]}" \
+    "${CLAUDE_MOUNTS[@]}" \
+    "${VCS_CONFIG_MOUNTS[@]}" \
+    "$IMAGE_NAME" \
+    "$@"
