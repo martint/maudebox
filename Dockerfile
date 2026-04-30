@@ -21,6 +21,12 @@ ENV MVND_DAEMON_STORAGE=/root/.mvnd
 # `ESC[…m` text.
 ENV LESS=-R
 
+# Claude Code's native binary lives in /usr/local/bin (already in PATH), but
+# it also checks that ~/.local/bin is on PATH and warns if not — that's where
+# its launcher symlink lives by convention. Put it on PATH to silence the
+# warning; the symlink itself is created in the Claude Code install step.
+ENV PATH=/root/.local/bin:$PATH
+
 # Host gitconfig is bind-mounted read-only by the maudebox wrapper, so the user's identity
 # and aliases work inside the container. But the host's commit.gpgsign=true
 # (with 1Password's macOS-only ssh-sign program) would auto-fail every commit.
@@ -64,13 +70,16 @@ RUN set -eux; \
 # ── Claude Code (native binary, no Node.js required) ─────────────────────────
 # The installer drops a launcher symlink in ~/.local/bin/claude pointing into
 # ~/.local/share/claude/versions/<ver>. We resolve the symlink and move the
-# real binary to /usr/local/bin so it lives outside any volume mount path.
+# real binary to /usr/local/bin so it lives outside any volume mount path,
+# then re-point the launcher symlink at it: the native binary records its
+# installMethod and warns at runtime if ~/.local/bin/claude is missing.
 RUN curl -fsSL https://claude.ai/install.sh | bash \
  && CLAUDE_LINK="$(ls "$HOME/.local/bin/claude" "$HOME/.claude/bin/claude" 2>/dev/null | head -1)" \
  && CLAUDE_BIN="$(readlink -f "$CLAUDE_LINK")" \
  && mv "$CLAUDE_BIN" /usr/local/bin/claude \
  && chmod a+rx /usr/local/bin/claude \
- && rm -rf "$HOME/.local/share/claude" "$HOME/.local/bin/claude" "$HOME/.claude"
+ && rm -rf "$HOME/.local/share/claude" "$HOME/.claude" \
+ && ln -sf /usr/local/bin/claude "$HOME/.local/bin/claude"
 
 # ── jujutsu ───────────────────────────────────────────────────────────────────
 # Use musl binaries: statically linked, no libc version dependency
