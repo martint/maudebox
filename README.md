@@ -62,9 +62,37 @@ maudebox --clean /path/to/project # delete this worktree's Maven overlay volume
 maudebox --tag my-tag . bash      # use a non-default image tag
 ```
 
+Run `maudebox --help` for the full option list.
+
 The host project directory is bind-mounted into the container at its **original host path** (e.g. `/Users/martin/projects/trino/workspaces/trino.lateral`). The entrypoint also creates a `/root/<basename>` symlink to that path and starts the shell there, so `$PWD` shows a short, friendly path while the underlying filesystem is still the host-path bind-mount.
 
 If the project is a **jj workspace** or **git worktree**, `maudebox` reads its metadata (`.jj/repo` for jj, `.git` for git), finds the base repo, and bind-mounts it at its host path too — so the absolute paths recorded inside the worktree resolve correctly and `jj` / `git` commands Just Work.
+
+### Ephemeral workspaces and worktrees
+
+`maudebox new <name>` creates a fresh jj workspace or git worktree off an existing project, launches `maudebox` on it, and — by default — tears it down when the container exits. This is convenient for short-lived experiments or for letting Claude work in an isolated scratch worktree that won't outlive the session.
+
+```sh
+maudebox new feature-x                       # ephemeral, from cwd
+maudebox new feature-x /path/to/project      # ephemeral, from a specific project
+maudebox new feature-x --from main           # start from a specific revision
+maudebox new feature-x --path /tmp/scratch   # custom target path
+maudebox new feature-x --keep                # preserve workspace + overlay on exit
+```
+
+Defaults:
+
+- **Target path:** `<project>/../<basename>.<name>` (sibling of the source project). Override with `--path PATH`.
+- **Starting revision:** jj's `@-` for jj, `HEAD` for git. Override with `--from REV`. For git, a new branch named `<name>` is created at that revision.
+- **VCS choice:** jj is preferred when both `.jj/` and `.git` are present (colocated repos).
+
+Cleanup runs through an `EXIT` trap, so it fires on normal exit, errors, and Ctrl-C alike. On cleanup:
+
+- **jj:** `jj workspace forget <name>` and `rm -rf <target>`. The change at `@` in that workspace becomes a regular commit in jj's op log, so committed work is recoverable via `jj op log` / `jj op restore`.
+- **git:** `git worktree remove --force <target>` and `git branch -D <name>`. Branch tip commits remain reachable via the reflog (default 90 days).
+- **Overlay volume:** the per-worktree `maudebox-overlay-…` volume is removed.
+
+Uncommitted working-copy changes are **not** preserved by ephemeral cleanup. Pass `--keep` if you might want to come back to the workspace, or commit before exiting the container.
 
 ## How it works
 

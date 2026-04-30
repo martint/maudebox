@@ -25,6 +25,7 @@ CLEAN=false
 usage() {
     cat <<'EOF'
 Usage: maudebox [--clean] [--tag TAG] [project-dir] [command...]
+       maudebox new <name> [project-dir] [--path PATH] [--from REV] [--keep]
 
 Launch a maudebox container for a host project directory. The project (and
 its base repo, if it's a jj workspace or git worktree) is bind-mounted at
@@ -41,13 +42,132 @@ Arguments:
   project-dir   host directory to mount (default: current directory)
   command...    command to run inside the container (default: interactive shell)
 
+Subcommands:
+  new <name>    create a jj workspace or git worktree from project-dir
+                (default: cwd) and launch maudebox on it. By default the
+                workspace/worktree and its overlay volume are removed when
+                the container exits.
+                  --path PATH   target path
+                                (default: <project>/../<basename>.<name>)
+                  --from REV    starting revision
+                                (default: jj @-, git HEAD)
+                  --keep        preserve the workspace/worktree and overlay
+                                volume after the container exits
+
 Examples:
   maudebox                               # interactive shell in current dir
   maudebox /path/to/myproject            # interactive shell, specific project
   maudebox . mvnd verify                 # run a build
   maudebox . claude                      # start Claude Code
   maudebox --clean /path/to/myproject    # delete that worktree's overlay volume
+  maudebox new feature-x                 # ephemeral workspace from cwd
+  maudebox new feature-x /path/to/proj   # ephemeral workspace from a project
+  maudebox new feature-x --from main     # start from a specific revision
+  maudebox new feature-x --keep          # keep workspace/overlay after exit
 EOF
+}
+
+# ── overlay volume name for a project path ───────────────────────────────────
+# Combines the directory basename (human-readable) with a short hash of the
+# full path (collision-proof), e.g. maudebox-overlay-myproject-a3f8c21b
+compute_volume_name() {
+    local dir="$1"
+    local dir_name path_hash
+    dir_name="$(basename "$dir")"
+    path_hash="$(echo "$dir" | sha256sum | cut -c1-8)"
+    echo "maudebox-overlay-${dir_name}-${path_hash}"
+}
+
+# ── `maudebox new` ────────────────────────────────────────────────────────────
+# Create a jj workspace or git worktree from a source project, run maudebox
+# on it, and (unless --keep is given) tear down the workspace/worktree and
+# its overlay volume on exit. jj is preferred when both .jj and .git are
+# present (colocated repos). State for the EXIT trap is held in script-scope
+# globals (NEW_*) so the cleanup function can see them when bash fires the
+# trap during shell teardown.
+NEW_NAME=""; NEW_TARGET=""; NEW_SOURCE=""; NEW_KIND=""; NEW_KEEP=false
+
+cmd_new() {
+    local from_rev=""
+    NEW_SOURCE="."
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) usage; exit 0 ;;
+            --path)    NEW_TARGET="$2"; shift 2 ;;
+            --from)    from_rev="$2";   shift 2 ;;
+            --keep)    NEW_KEEP=true;   shift ;;
+            -*)        echo "Unknown option: $1" >&2; exit 1 ;;
+            *)
+                if [ -z "$NEW_NAME" ]; then
+                    NEW_NAME="$1"
+                elif [ "$NEW_SOURCE" = "." ]; then
+                    NEW_SOURCE="$1"
+                else
+                    echo "Unexpected argument: $1" >&2; exit 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [ -n "$NEW_NAME" ] || { echo "maudebox new: <name> is required" >&2; exit 1; }
+
+    NEW_SOURCE="$(realpath "$NEW_SOURCE")"
+    [ -d "$NEW_SOURCE" ] || { echo "Not a directory: $NEW_SOURCE" >&2; exit 1; }
+
+    if [ -z "$NEW_TARGET" ]; then
+        NEW_TARGET="$(dirname "$NEW_SOURCE")/$(basename "$NEW_SOURCE").${NEW_NAME}"
+    elif [[ "$NEW_TARGET" != /* ]]; then
+        NEW_TARGET="$(pwd)/$NEW_TARGET"
+    fi
+
+    [ -e "$NEW_TARGET" ] && { echo "Target path already exists: $NEW_TARGET" >&2; exit 1; }
+
+    if [ -d "$NEW_SOURCE/.jj" ]; then
+        NEW_KIND=jj
+        echo "Creating jj workspace '$NEW_NAME' at: $NEW_TARGET"
+        local jj_args=( workspace add --name "$NEW_NAME" )
+        [ -n "$from_rev" ] && jj_args+=( -r "$from_rev" )
+        jj_args+=( "$NEW_TARGET" )
+        ( cd "$NEW_SOURCE" && jj "${jj_args[@]}" )
+    elif [ -e "$NEW_SOURCE/.git" ]; then
+        NEW_KIND=git
+        local rev="${from_rev:-HEAD}"
+        echo "Creating git worktree '$NEW_NAME' at: $NEW_TARGET (branch: $NEW_NAME from $rev)"
+        ( cd "$NEW_SOURCE" && git worktree add -b "$NEW_NAME" "$NEW_TARGET" "$rev" )
+    else
+        echo "Not a jj or git repo: $NEW_SOURCE" >&2
+        exit 1
+    fi
+
+    if ! $NEW_KEEP; then
+        trap _maudebox_new_cleanup EXIT
+    fi
+
+    local rc=0
+    "$0" --tag "$IMAGE_NAME" "$NEW_TARGET" || rc=$?
+    exit $rc
+}
+
+_maudebox_new_cleanup() {
+    local rc=$?
+    set +e   # best-effort cleanup
+    echo "Cleaning up ephemeral $NEW_KIND workspace at: $NEW_TARGET"
+    case "$NEW_KIND" in
+        jj)
+            ( cd "$NEW_SOURCE" && jj workspace forget "$NEW_NAME" )
+            rm -rf "$NEW_TARGET"
+            ;;
+        git)
+            ( cd "$NEW_SOURCE" && git worktree remove --force "$NEW_TARGET" )
+            ( cd "$NEW_SOURCE" && git branch -D "$NEW_NAME" )
+            ;;
+    esac
+    local volume
+    volume="$(compute_volume_name "$NEW_TARGET")"
+    docker volume rm "$volume" >/dev/null 2>&1
+    return $rc
 }
 
 # ── parse flags ───────────────────────────────────────────────────────────────
@@ -59,6 +179,12 @@ while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
         *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
+
+# ── subcommand dispatch ───────────────────────────────────────────────────────
+if [[ "${1:-}" == "new" ]]; then
+    shift
+    cmd_new "$@"
+fi
 
 PROJECT_DIR="$(realpath "${1:-.}")"
 shift || true   # remaining args become the container command (default: bash)
@@ -112,11 +238,7 @@ detect_vcs_base() {
 VCS_BASE="$(detect_vcs_base "$PROJECT_DIR")"
 
 # ── per-worktree volume name ──────────────────────────────────────────────────
-# Combines the directory basename (human-readable) with a short hash of the
-# full path (collision-proof), e.g. maudebox-overlay-myproject-a3f8c21b
-DIR_NAME="$(basename "$PROJECT_DIR")"
-PATH_HASH="$(echo "$PROJECT_DIR" | sha256sum | cut -c1-8)"
-UPPER_VOLUME="maudebox-overlay-${DIR_NAME}-${PATH_HASH}"
+UPPER_VOLUME="$(compute_volume_name "$PROJECT_DIR")"
 
 # ── --clean ───────────────────────────────────────────────────────────────────
 if $CLEAN; then
