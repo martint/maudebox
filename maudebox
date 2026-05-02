@@ -269,6 +269,20 @@ for path in CLAUDE.md settings.json agents commands plugins; do
     fi
 done
 
+# Claude's auto-memory lives at ~/.claude/projects/<encoded-cwd>/memory/, where
+# the encoding replaces '/' and '.' in the canonical cwd with '-'. Inside the
+# container the project is bind-mounted at its host path, so cwd canonicalizes
+# to the same string — meaning host and container agree on the encoded key.
+# Bind-mount just that one subdir (read-write) so memories written inside the
+# container land in the host's ~/.claude/projects/<key>/memory/ and are visible
+# to host-side Claude. The rest of projects/<key>/ (session logs, etc.) stays
+# in the named volume, consistent with the broader exclusion of projects/.
+PROJECT_KEY="${PROJECT_DIR//\//-}"
+PROJECT_KEY="${PROJECT_KEY//./-}"
+HOST_MEMORY_DIR="$HOST_CLAUDE_DIR/projects/$PROJECT_KEY/memory"
+mkdir -p "$HOST_MEMORY_DIR"
+CLAUDE_MOUNTS+=( -v "$HOST_MEMORY_DIR:/root/.claude/projects/$PROJECT_KEY/memory" )
+
 # ── host git/jj config (read-only) ────────────────────────────────────────────
 # Pick up the user's identity, aliases, ignore rules, and jj revset aliases
 # (e.g. closest_bookmark) without importing host-local state. We deliberately

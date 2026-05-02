@@ -85,6 +85,8 @@ The host's `commit.gpgsign = true` paired with 1Password's macOS-only ssh-sign p
 
 `maudebox` mounts a shared named volume `maudebox-claude` at `/root/.claude` so login state persists across runs and across worktrees. On top of that volume, specific files from the host's `~/.claude/` (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) are bind-mounted read-only — picking up the user's global Claude config without dragging in host-path-keyed state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`).
 
+One narrow carve-out under `projects/`: Claude Code's auto-memory directory `~/.claude/projects/<encoded-cwd>/memory/` is bind-mounted read-write so memories written inside the container reach the host (and vice versa). The encoding maps `/` and `.` in the canonical cwd to `-`, and because the project is bind-mounted at its host path inside the container, host and container agree on the key. The rest of `projects/<key>/` (session logs, etc.) is deliberately left in the named volume.
+
 `~/.claude.json` (login token + project list) lives outside `~/.claude/` on the host, so it can't be picked up by the volume mount. The entrypoint instead symlinks `~/.claude.json → ~/.claude/state.json` so writes follow into the persistent volume. The user must log into Claude Code once inside any container; subsequent containers share that login.
 
 ### Per-worktree volume naming
