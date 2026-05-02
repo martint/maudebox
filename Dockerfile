@@ -38,9 +38,21 @@ ENV GIT_CONFIG_COUNT=2 \
     GIT_CONFIG_KEY_1=tag.gpgSign     GIT_CONFIG_VALUE_1=false
 
 # ── system packages ──────────────────────────────────────────────────────────
+# gh ships from GitHub's own apt repo (cli.github.com/packages) which has
+# both amd64 and arm64 debs, so no `uname -m` branching is needed. The repo
+# is set up before the second apt-get update so gh installs in the same
+# transaction as the base packages.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
+        gnupg \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod a+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        gh \
         git \
         less \
         ripgrep \
