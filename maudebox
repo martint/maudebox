@@ -21,6 +21,7 @@ set -euo pipefail
 
 IMAGE_NAME="maudebox"
 CLEAN=false
+MEMORY_FROM=""
 
 usage() {
     cat <<'EOF'
@@ -34,9 +35,11 @@ local repo is layered: the host's ~/.m2 is exposed read-only beneath a
 per-worktree overlay volume so writes stay isolated per worktree.
 
 Options:
-  --clean       remove the overlay volume for this worktree and exit
-  --tag TAG     image tag to run (default: maudebox)
-  -h, --help    show this help and exit
+  --clean              remove the overlay volume for this worktree and exit
+  --tag TAG            image tag to run (default: maudebox)
+  --memory-from PATH   share Claude's auto-memory dir with another project
+                       (host source keyed to PATH, container target unchanged)
+  -h, --help           show this help and exit
 
 Arguments:
   project-dir   host directory to mount (default: current directory)
@@ -44,7 +47,8 @@ Arguments:
 
 Subcommands:
   new <name>    create a jj workspace or git worktree from project-dir
-                (default: cwd) and launch maudebox on it. By default the
+                (default: cwd) and launch maudebox on it, sharing the
+                parent project's Claude auto-memory dir. By default the
                 workspace/worktree and its overlay volume are removed when
                 the container exits.
                   --path PATH   target path
@@ -146,7 +150,7 @@ cmd_new() {
     fi
 
     local rc=0
-    "$0" --tag "$IMAGE_NAME" "$NEW_TARGET" || rc=$?
+    "$0" --tag "$IMAGE_NAME" --memory-from "$NEW_SOURCE" "$NEW_TARGET" || rc=$?
     exit $rc
 }
 
@@ -173,9 +177,10 @@ _maudebox_new_cleanup() {
 # ── parse flags ───────────────────────────────────────────────────────────────
 while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
     case "$1" in
-        -h|--help) usage; exit 0 ;;
-        --clean) CLEAN=true;        shift ;;
-        --tag)   IMAGE_NAME="$2";   shift 2 ;;
+        -h|--help)     usage; exit 0 ;;
+        --clean)       CLEAN=true;        shift ;;
+        --tag)         IMAGE_NAME="$2";   shift 2 ;;
+        --memory-from) MEMORY_FROM="$2";  shift 2 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
@@ -272,14 +277,22 @@ done
 # Claude's auto-memory lives at ~/.claude/projects/<encoded-cwd>/memory/, where
 # the encoding replaces '/' and '.' in the canonical cwd with '-'. Inside the
 # container the project is bind-mounted at its host path, so cwd canonicalizes
-# to the same string — meaning host and container agree on the encoded key.
+# to the same string — meaning host and container normally agree on the key.
 # Bind-mount just that one subdir (read-write) so memories written inside the
 # container land in the host's ~/.claude/projects/<key>/memory/ and are visible
 # to host-side Claude. The rest of projects/<key>/ (session logs, etc.) stays
 # in the named volume, consistent with the broader exclusion of projects/.
+#
+# --memory-from breaks the host/container symmetry: the container target is
+# still keyed by PROJECT_DIR (Claude Code derives it from cwd inside the
+# container), but the host source is keyed by the override path. `maudebox new`
+# uses this so an ephemeral workspace shares its parent project's memory.
 PROJECT_KEY="${PROJECT_DIR//\//-}"
 PROJECT_KEY="${PROJECT_KEY//./-}"
-HOST_MEMORY_DIR="$HOST_CLAUDE_DIR/projects/$PROJECT_KEY/memory"
+MEMORY_SOURCE_DIR="${MEMORY_FROM:-$PROJECT_DIR}"
+MEMORY_SOURCE_KEY="${MEMORY_SOURCE_DIR//\//-}"
+MEMORY_SOURCE_KEY="${MEMORY_SOURCE_KEY//./-}"
+HOST_MEMORY_DIR="$HOST_CLAUDE_DIR/projects/$MEMORY_SOURCE_KEY/memory"
 mkdir -p "$HOST_MEMORY_DIR"
 CLAUDE_MOUNTS+=( -v "$HOST_MEMORY_DIR:/root/.claude/projects/$PROJECT_KEY/memory" )
 
