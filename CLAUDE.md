@@ -83,7 +83,7 @@ The host's `commit.gpgsign = true` paired with 1Password's macOS-only ssh-sign p
 
 ### Claude Code config sharing
 
-`maudebox` mounts a shared named volume `maudebox-claude` at `/root/.claude` so login state persists across runs and across worktrees. On top of that volume, specific files from the host's `~/.claude/` (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) are bind-mounted read-only — picking up the user's global Claude config without dragging in host-path-keyed state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`).
+`maudebox` mounts a shared named volume `maudebox-state` at `/root/.claude` so login state persists across runs and across worktrees. On top of that volume, specific files from the host's `~/.claude/` (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) are bind-mounted read-only — picking up the user's global Claude config without dragging in host-path-keyed state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`).
 
 One narrow carve-out under `projects/`: Claude Code's auto-memory directory `~/.claude/projects/<encoded-cwd>/memory/` is bind-mounted read-write so memories written inside the container reach the host (and vice versa). The encoding maps `/` and `.` in the canonical cwd to `-`, and because the project is bind-mounted at its host path inside the container, host and container normally agree on the key. The rest of `projects/<key>/` (session logs, etc.) is deliberately left in the named volume.
 
