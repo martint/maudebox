@@ -6,6 +6,7 @@ A Docker image for working on Maven projects with [Claude Code](https://claude.a
 - [`mvnd`](https://github.com/apache/maven-mvnd) (Maven Daemon) — symlinked as both `mvnd` and `mvn`
 - `git` and [`jj`](https://github.com/jj-vcs/jj) (Jujutsu VCS)
 - Claude Code CLI
+- GitHub CLI (`gh`)
 
 Builds natively on amd64 and arm64.
 
@@ -25,9 +26,9 @@ Maven's local repository (`~/.m2/repository`) is a shared mutable store. When tw
 
 `maudebox` gives **each worktree its own writable Maven repository layer** via overlayfs. The host's `~/.m2` is the read-only lower layer, so cached third-party artifacts are shared and warm. The upper layer — where every `install`, every downloaded snapshot, every locally built jar lands — is a Docker named volume keyed to that specific worktree's path. Two concurrent `maudebox` containers on two worktrees of the same repo each see their own `1.2.3-SNAPSHOT`, with zero cross-talk and zero mutation of the host's `~/.m2`.
 
-### Shared Claude login and global config
+### Shared logins and global config
 
-As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) is bind-mounted read-only, and the login token is kept in a persistent Docker volume. Log in once inside any container; every future container for any worktree is already logged in.
+As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) is bind-mounted read-only, and login state for Claude and the GitHub CLI is kept in a shared persistent Docker volume. Log in once to each inside any container; every future container for any worktree is already logged in.
 
 ## Prerequisites
 
@@ -116,9 +117,14 @@ maudebox-overlay-<basename>-<8-char-hash>
 
 `maudebox --clean <dir>` removes only that one volume.
 
-### Claude Code config
+### Login state and global config
 
-A shared Docker volume `maudebox-state` is mounted at `~/.claude` inside the container. On top of that volume, the following items from the host's `~/.claude/` are bind-mounted read-only (only those that actually exist on the host):
+A shared Docker volume `maudebox-state` holds writable state across containers, with two isolated subtrees mounted at the canonical paths each tool expects:
+
+- `claude/` → `/root/.claude` (Claude login, plugin caches)
+- `gh/` → `/root/.config/gh` (`gh auth` token, config)
+
+On top of the `claude/` subtree, the following items from the host's `~/.claude/` are bind-mounted read-only (only those that actually exist on the host):
 
 - `CLAUDE.md` — your global instructions
 - `settings.json`
@@ -134,7 +140,7 @@ Items that are keyed to host paths or are session-only state (`projects/`, `todo
 ~/.claude.json -> ~/.claude/state.json
 ```
 
-This means: **log in to Claude Code once inside any container**, and every future container — for any worktree — will already be logged in.
+This means: **log in to Claude Code (and `gh`) once inside any container**, and every future container — for any worktree — will already be logged in.
 
 ### Container user
 
@@ -146,7 +152,7 @@ Everything lives under `/root`: the Maven cache (`/root/.m2`), the Claude config
 
 ```sh
 maudebox --clean /path/to/project   # remove that worktree's Maven overlay
-docker volume rm maudebox-state     # forget the persistent Claude login
+docker volume rm maudebox-state     # forget persistent Claude + gh logins
 docker rmi maudebox                 # remove the image
 ```
 

@@ -81,15 +81,22 @@ Auth and signing material (`~/.ssh/`, `~/.git-credentials`, `~/.gnupg/`) is inte
 
 The host's `commit.gpgsign = true` paired with 1Password's macOS-only ssh-sign program would auto-fail every container commit. The Dockerfile sets `GIT_CONFIG_COUNT/KEY/VALUE` env vars to force `commit.gpgsign=false` and `tag.gpgSign=false` at runtime; these override mounted user config (same precedence as `git -c`).
 
-### Claude Code config sharing
+### Persistent state (Claude + gh)
 
-`maudebox` mounts a shared named volume `maudebox-state` at `/root/.claude` so login state persists across runs and across worktrees. On top of that volume, specific files from the host's `~/.claude/` (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) are bind-mounted read-only — picking up the user's global Claude config without dragging in host-path-keyed state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`).
+`maudebox` shares a single named volume `maudebox-state` across all containers/worktrees. The volume hosts two isolated subtrees, each mounted at the canonical path the tool expects via Docker's `volume-subpath`:
+
+- `claude/` → `/root/.claude` (Claude login, plugin caches)
+- `gh/`     → `/root/.config/gh` (gh auth, config)
+
+The two trees never mix on disk despite living in the same volume. `volume-subpath` mounts fail if the subdir doesn't exist, so the wrapper runs a throwaway `mkdir -p /v/claude /v/gh` container before each launch (idempotent, ~50ms). Requires Docker 25+ (subpath mounts).
+
+On top of the `claude/` subtree, specific files from the host's `~/.claude/` (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) are bind-mounted read-only — picking up the user's global Claude config without dragging in host-path-keyed state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`).
 
 One narrow carve-out under `projects/`: Claude Code's auto-memory directory `~/.claude/projects/<encoded-cwd>/memory/` is bind-mounted read-write so memories written inside the container reach the host (and vice versa). The encoding maps `/` and `.` in the canonical cwd to `-`, and because the project is bind-mounted at its host path inside the container, host and container normally agree on the key. The rest of `projects/<key>/` (session logs, etc.) is deliberately left in the named volume.
 
 `--memory-from PATH` overrides the *host* side of that bind-mount — the container target stays keyed to the project's cwd (which is what Claude Code looks up inside the container), but the host source is keyed to `PATH` instead. `maudebox new` uses this to point an ephemeral workspace at its parent project's memory, so memories from short-lived workspaces accrue against the long-lived project rather than scattering into per-workspace dirs.
 
-`~/.claude.json` (login token + project list) lives outside `~/.claude/` on the host, so it can't be picked up by the volume mount. The entrypoint instead symlinks `~/.claude.json → ~/.claude/state.json` so writes follow into the persistent volume. The user must log into Claude Code once inside any container; subsequent containers share that login.
+`~/.claude.json` (login token + project list) lives outside `~/.claude/` on the host, so it can't be picked up by the volume mount. The entrypoint instead symlinks `~/.claude.json → ~/.claude/state.json` so writes follow into the persistent volume. The user must log into Claude Code once inside any container; subsequent containers share that login. Same applies to `gh auth login`.
 
 ### Per-worktree volume naming
 

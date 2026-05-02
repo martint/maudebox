@@ -256,17 +256,28 @@ if $CLEAN; then
     exit 0
 fi
 
-# ── Claude config: persistent volume + read-only host overlays ────────────────
-# maudebox-state holds writable state (login token, todos, plugin caches) and
-# is shared across worktrees so a single `claude` login covers every container.
-# Specific files from the host's ~/.claude/ are bind-mounted read-only on top
-# so global instructions, settings, agents, commands, and plugin definitions
-# come from the host. Items that are keyed to host paths (projects/, todos/,
-# statsig/, shell-snapshots/) are intentionally left out.
+# ── Persistent state: maudebox-state volume + read-only host overlays ────────
+# maudebox-state holds writable state shared across all containers/worktrees.
+# A single volume hosts two isolated subtrees, mounted into the container at
+# the canonical paths each tool expects:
+#   claude/  → /root/.claude        (Claude login, plugin caches)
+#   gh/      → /root/.config/gh     (gh auth, config)
+# Using subpath mounts keeps the two trees from mixing on disk while sharing a
+# single Docker volume. volume-subpath mounts fail if the subpath doesn't
+# exist, so we mkdir both up front via a throwaway container — idempotent and
+# cheap (~50ms). On top of the claude subtree, specific files from the host's
+# ~/.claude/ are bind-mounted read-only so the user's global Claude config
+# (CLAUDE.md, settings, agents, commands, plugins) comes from the host.
+# Host-path-keyed entries (projects/, todos/, statsig/, shell-snapshots/) are
+# intentionally left out.
 STATE_VOLUME="maudebox-state"
 docker volume create "$STATE_VOLUME" > /dev/null
+docker run --rm --entrypoint mkdir -v "${STATE_VOLUME}:/v" "$IMAGE_NAME" -p /v/claude /v/gh
 
-CLAUDE_MOUNTS=( -v "${STATE_VOLUME}:/root/.claude" )
+CLAUDE_MOUNTS=(
+    --mount "type=volume,src=${STATE_VOLUME},dst=/root/.claude,volume-subpath=claude"
+    --mount "type=volume,src=${STATE_VOLUME},dst=/root/.config/gh,volume-subpath=gh"
+)
 HOST_CLAUDE_DIR="$HOME/.claude"
 for path in CLAUDE.md settings.json agents commands plugins; do
     if [ -e "$HOST_CLAUDE_DIR/$path" ]; then
