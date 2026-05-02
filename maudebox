@@ -257,16 +257,16 @@ if $CLEAN; then
 fi
 
 # ── Claude config: persistent volume + read-only host overlays ────────────────
-# maudebox-claude holds writable state (login token, todos, plugin caches) and
+# maudebox-state holds writable state (login token, todos, plugin caches) and
 # is shared across worktrees so a single `claude` login covers every container.
 # Specific files from the host's ~/.claude/ are bind-mounted read-only on top
 # so global instructions, settings, agents, commands, and plugin definitions
 # come from the host. Items that are keyed to host paths (projects/, todos/,
 # statsig/, shell-snapshots/) are intentionally left out.
-CLAUDE_AUTH_VOLUME="maudebox-claude"
-docker volume create "$CLAUDE_AUTH_VOLUME" > /dev/null
+STATE_VOLUME="maudebox-state"
+docker volume create "$STATE_VOLUME" > /dev/null
 
-CLAUDE_MOUNTS=( -v "${CLAUDE_AUTH_VOLUME}:/root/.claude" )
+CLAUDE_MOUNTS=( -v "${STATE_VOLUME}:/root/.claude" )
 HOST_CLAUDE_DIR="$HOME/.claude"
 for path in CLAUDE.md settings.json agents commands plugins; do
     if [ -e "$HOST_CLAUDE_DIR/$path" ]; then
