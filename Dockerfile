@@ -27,6 +27,12 @@ ENV LESS=-R
 # warning; the symlink itself is created in the Claude Code install step.
 ENV PATH=/root/.local/bin:$PATH
 
+# Claude Code refuses --dangerously-skip-permissions when running as root
+# unless IS_SANDBOX=1 signals the environment is already sandboxed. The
+# container *is* the sandbox here (see the "Container runs as root" notes),
+# so set it unconditionally.
+ENV IS_SANDBOX=1
+
 # Host gitconfig is bind-mounted read-only by the maudebox wrapper, so the user's identity
 # and aliases work inside the container. But the host's commit.gpgsign=true
 # (with 1Password's macOS-only ssh-sign program) would auto-fail every commit.
