@@ -40,11 +40,12 @@ Usage: maudebox [--clean] [--tag TAG] [project-dir] [command...]
        maudebox new <name> [project-dir] [--path PATH] [--from REV] [--ephemeral]
        maudebox list
        maudebox keep <id-or-name>
+       maudebox mount {add SPEC | list | rm SPEC}
 
 Launch a maudebox container for a host project directory. The project (and
 its base repo, if it's a jj workspace or git worktree) is bind-mounted at
 its host path inside the container so VCS metadata still resolves. Extra
-host paths can be exposed via --mount or ~/.maudebox; any of them can use
+host paths can be exposed via --mount or the user config; any of them can use
 mode `overlay` to layer a per-worktree writable upper over a read-only
 host lower (typically used for ~/.m2 to isolate Maven snapshots per
 worktree without mutating the host cache).
@@ -99,6 +100,12 @@ Subcommands:
                 the ephemeral name originally passed to `maudebox new`. From
                 inside the container, run `maudebox-keep` instead — same
                 effect.
+  mount add SPEC
+                append a mount spec (HOST:CONTAINER[:ro|rw|overlay]) to
+                the user config so it applies to every future invocation.
+  mount list    print all mount specs currently configured in the user config.
+  mount rm SPEC
+                remove a previously-added mount spec from the user config.
 
 Examples:
   maudebox                               # interactive shell in current dir
@@ -113,6 +120,9 @@ Examples:
   maudebox list                          # list registered maudebox instances
   maudebox keep feature-x                # don't tear down on exit (running instance)
   maudebox --mount ~/.aws:~/.aws:ro      # bind ~/.aws read-only into the container
+  maudebox mount add ~/.m2:~/.m2:overlay # persist a mount in the user config
+  maudebox mount list                    # show configured mounts
+  maudebox mount rm ~/.m2:~/.m2:overlay  # remove a configured mount
 EOF
 }
 
@@ -423,6 +433,135 @@ cmd_list() {
     } | column -t -s $'\t'
 }
 
+# ── `maudebox mount {add|list|rm}` ───────────────────────────────────────────
+# Manage the user config file by reading the current `mounts` list, mutating
+# it, and rewriting only that array — comments and any other TOML content
+# elsewhere in the file are preserved verbatim.
+
+# Emit the `mounts = [...]` block to stdout from the caller's `specs` array
+# (visible via bash dynamic scope). Non-empty → multi-line for readability,
+# empty → single-line `mounts = []`.
+emit_mounts_block() {
+    if [ "${#specs[@]}" -eq 0 ]; then
+        echo "mounts = []"
+    else
+        echo "mounts = ["
+        local s
+        for s in "${specs[@]}"; do
+            printf '    "%s",\n' "$s"
+        done
+        echo "]"
+    fi
+}
+
+# Write `specs[@]` back to the user config, replacing only the `mounts = [...]`
+# block and leaving every other line of the file (comments, other TOML
+# keys, blank lines) untouched. The block is emitted as a multi-line array
+# when non-empty so `mount list` reads stably.
+write_mounts_config() {
+    # `"$@"` (no braces) is the bash-3.2-safe form under set -u when there
+    # are no positional args; `"${@}"` errors with "@: unbound variable".
+    local -a specs=( "$@" )
+    local tmp="${MAUDEBOX_CONFIG}.tmp.$$"
+    mkdir -p "$(dirname "$MAUDEBOX_CONFIG")"
+
+    if [ ! -e "$MAUDEBOX_CONFIG" ]; then
+        emit_mounts_block > "$tmp"
+        mv "$tmp" "$MAUDEBOX_CONFIG"
+        return
+    fi
+
+    # Existing file: stream lines through, replace just the mounts
+    # assignment range, leave everything else as-is. Multi-line array
+    # support: once we hit `mounts = [`, swallow input lines until the
+    # closing `]`. Single-line array (`mounts = ["a"]`) ends on the same
+    # line. If no mounts assignment exists at all, append at the end.
+    local line in_block=false replaced=false
+    {
+        while IFS= read -r line || [ -n "$line" ]; do
+            if ! $in_block && [[ "$line" =~ ^[[:space:]]*mounts[[:space:]]*=[[:space:]]*\[ ]]; then
+                emit_mounts_block
+                replaced=true
+                if [[ "$line" == *"]"* ]]; then
+                    continue   # single-line array: done
+                fi
+                in_block=true
+                continue
+            fi
+            if $in_block; then
+                if [[ "$line" == *"]"* ]]; then
+                    in_block=false
+                fi
+                continue
+            fi
+            printf '%s\n' "$line"
+        done < "$MAUDEBOX_CONFIG"
+        if ! $replaced; then
+            emit_mounts_block
+        fi
+    } > "$tmp"
+    mv "$tmp" "$MAUDEBOX_CONFIG"
+}
+
+cmd_mount() {
+    local action="${1:-}"
+    [ -n "$action" ] || { echo "maudebox mount: action required (add|list|rm)" >&2; exit 1; }
+    shift
+
+    # Read current specs into an array.
+    local -a current=()
+    while IFS= read -r _spec; do
+        [ -n "$_spec" ] && current+=( "$_spec" )
+    done < <(parse_toml_mounts "$MAUDEBOX_CONFIG")
+
+    case "$action" in
+        list)
+            local s
+            for s in "${current[@]+"${current[@]}"}"; do
+                printf '%s\n' "$s"
+            done
+            ;;
+        add)
+            local spec="${1:-}"
+            [ -n "$spec" ] || { echo "maudebox mount add: SPEC required" >&2; exit 1; }
+            local s
+            for s in "${current[@]+"${current[@]}"}"; do
+                if [ "$s" = "$spec" ]; then
+                    echo "Already in the user config: $spec"
+                    exit 0
+                fi
+            done
+            current+=( "$spec" )
+            write_mounts_config "${current[@]}"
+            echo "Added: $spec"
+            ;;
+        rm)
+            local spec="${1:-}"
+            [ -n "$spec" ] || { echo "maudebox mount rm: SPEC required" >&2; exit 1; }
+            local -a kept=()
+            local found=false
+            local s
+            for s in "${current[@]+"${current[@]}"}"; do
+                if [ "$s" = "$spec" ] && ! $found; then
+                    found=true
+                else
+                    kept+=( "$s" )
+                fi
+            done
+            if ! $found; then
+                echo "Not in the user config: $spec" >&2
+                exit 1
+            fi
+            write_mounts_config "${kept[@]+"${kept[@]}"}"
+            echo "Removed: $spec"
+            ;;
+        *)
+            echo "maudebox mount: unknown action '$action' (expected add|list|rm)" >&2
+            exit 1
+            ;;
+    esac
+}
+
 # ── `maudebox keep <id-or-name>` ─────────────────────────────────────────────
 # Find a running ephemeral container by container ID, instance basename, or
 # the original `maudebox new <name>` name, then drop the `keep` flag in its
@@ -486,9 +625,10 @@ done
 
 # ── subcommand dispatch ───────────────────────────────────────────────────────
 case "${1:-}" in
-    new)  shift; cmd_new "$@" ;;
-    list) shift; cmd_list "$@"; exit ;;
-    keep) shift; cmd_keep "$@"; exit ;;
+    new)   shift; cmd_new "$@" ;;
+    list)  shift; cmd_list "$@";  exit ;;
+    keep)  shift; cmd_keep "$@";  exit ;;
+    mount) shift; cmd_mount "$@"; exit ;;
 esac
 
 PROJECT_DIR="$(realpath "${1:-.}")"

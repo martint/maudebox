@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A Docker-based dev environment that ships JDK 25 (Temurin), `mvnd` (Maven Daemon), `git`, `jj` (jujutsu), and the Claude Code CLI in a single image. The image is meant to be run against an arbitrary host project directory: the host's source tree is bind-mounted at its original host path inside the container (so jj/git worktree metadata resolves). Extra host paths can be exposed via `--mount` flags or a `~/.maudebox` config; one of them can opt into mode `overlay`, which layers a per-worktree writable upper over a read-only host lower (the typical use case is `~/.m2`, giving each worktree isolated Maven snapshot writes while sharing the host cache as warm starting state).
+A Docker-based dev environment that ships JDK 25 (Temurin), `mvnd` (Maven Daemon), `git`, `jj` (jujutsu), and the Claude Code CLI in a single image. The image is meant to be run against an arbitrary host project directory: the host's source tree is bind-mounted at its original host path inside the container (so jj/git worktree metadata resolves). Extra host paths can be exposed via `--mount` flags or a `$XDG_CONFIG_HOME/maudebox/config.toml` config; one of them can opt into mode `overlay`, which layers a per-worktree writable upper over a read-only host lower (the typical use case is `~/.m2`, giving each worktree isolated Maven snapshot writes while sharing the host cache as warm starting state).
 
 The repo contains only the container itself: `Dockerfile`, `build.sh`, `maudebox` (the run wrapper), `entrypoint.sh`, `prompt.sh`. There is no application source code here — changes to this repo are changes to the dev-container itself.
 
@@ -33,7 +33,7 @@ There are no tests, no linters, and no CI configured in this repo. To validate a
 
 ### Opt-in three-layer cache via overlayfs (one or more)
 
-The non-obvious piece is in `entrypoint.sh`. For each mount spec that uses mode `overlay` (e.g. `~/.m2:~/.m2:overlay` in `~/.maudebox` or via `--mount`), the wrapper:
+The non-obvious piece is in `entrypoint.sh`. For each mount spec that uses mode `overlay` (e.g. `~/.m2:~/.m2:overlay` in `$XDG_CONFIG_HOME/maudebox/config.toml` or via `--mount`), the wrapper:
 
 - bind-mounts the host source at `/maudebox/overlay-N/lower` read-only,
 - creates a per-worktree+per-target Docker volume (`maudebox-overlay-<basename>-<projhash>-<targethash>`) mounted at `/maudebox/overlay-N/upper`,

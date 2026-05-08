@@ -99,6 +99,18 @@ In both cases the spec syntax is `HOST:CONTAINER[:ro|rw|overlay]`. A leading `~`
 
 **Overlay mode** layers a per-worktree writable Docker volume over the read-only host source, giving each worktree isolated writes while sharing the host content as warm starting state — handy for `~/.m2` (Maven), `~/.cargo`, `~/.gradle`, `~/.npm`, etc. Repeat with different targets to set up multiple overlays in one container; each one creates its own per-worktree volume.
 
+#### Managing mounts from the CLI
+
+You can edit `the user config` by hand, but a small subcommand handles the common operations:
+
+```sh
+maudebox mount add ~/.m2:~/.m2:overlay     # append to the user config
+maudebox mount list                        # print configured specs
+maudebox mount rm  ~/.m2:~/.m2:overlay     # remove an exact-match spec
+```
+
+`add` is idempotent (a duplicate spec is left as-is). `rm` requires an exact match against what `mount list` shows — copy-paste from `list` rather than retyping. Only the `mounts = [ ... ]` block in `the user config` is rewritten on mutation; comments and any other TOML content elsewhere in the file are preserved verbatim.
+
 ### Spawning a new workspace or worktree
 
 `maudebox new <name>` creates a fresh jj workspace or git worktree off an existing project and launches `maudebox` on it. By default the workspace persists after the container exits, just like running `maudebox <path>` would — `new` is essentially `mkdir-and-enter`. Pass `--ephemeral` for short-lived scratch workspaces that should be torn down on exit.
