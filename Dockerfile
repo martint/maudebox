@@ -24,6 +24,10 @@ ENV MVND_DAEMON_STORAGE=/root/.mvnd
 # `ESC[…m` text.
 ENV LESS=-R
 
+# Advertise 24-bit color support so tools that gate truecolor output on
+# $COLORTERM (jj's diff renderer, bat, delta, etc.) emit full RGB escapes.
+ENV COLORTERM=truecolor
+
 # Claude Code's native binary lives in /usr/local/bin (already in PATH), but
 # it also checks that ~/.local/bin is on PATH and warns if not — that's where
 # its launcher symlink lives by convention. Put it on PATH to silence the
