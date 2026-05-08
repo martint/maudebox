@@ -351,6 +351,7 @@ docker run --rm -it \
     --cap-add SYS_ADMIN \
     --security-opt apparmor=unconfined \
     -e "HOST_PROJECT_DIR=$PROJECT_DIR" \
+    -e "MAUDEBOX_INSTANCE=$(basename "$PROJECT_DIR")" \
     "${USER_ENV[@]}" \
     -v "$HOME/.m2:/m2-host:ro" \
     -v "${UPPER_VOLUME}:/m2-upper" \

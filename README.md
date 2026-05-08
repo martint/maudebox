@@ -67,6 +67,8 @@ Run `maudebox --help` for the full option list.
 
 The host project directory is bind-mounted into the container at its **original host path** (e.g. `/Users/martin/projects/trino/workspaces/trino.lateral`). The entrypoint also creates a `/root/<basename>` symlink to that path and starts the shell there, so `$PWD` shows a short, friendly path while the underlying filesystem is still the host-path bind-mount.
 
+The same basename is also exposed as `$MAUDEBOX_INSTANCE`, which is convenient as a stable handle for the running container — e.g. `claude --remote-control "$MAUDEBOX_INSTANCE"`.
+
 If the project is a **jj workspace** or **git worktree**, `maudebox` reads its metadata (`.jj/repo` for jj, `.git` for git), finds the base repo, and bind-mounts it at its host path too — so the absolute paths recorded inside the worktree resolve correctly and `jj` / `git` commands Just Work.
 
 ### Ephemeral workspaces and worktrees
