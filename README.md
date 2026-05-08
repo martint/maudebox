@@ -73,16 +73,16 @@ The same basename is also exposed as `$MAUDEBOX_INSTANCE`, which is convenient a
 
 If the project is a **jj workspace** or **git worktree**, `maudebox` reads its metadata (`.jj/repo` for jj, `.git` for git), finds the base repo, and bind-mounts it at its host path too — so the absolute paths recorded inside the worktree resolve correctly and `jj` / `git` commands Just Work.
 
-### Ephemeral workspaces and worktrees
+### Spawning a new workspace or worktree
 
-`maudebox new <name>` creates a fresh jj workspace or git worktree off an existing project, launches `maudebox` on it, and — by default — tears it down when the container exits. This is convenient for short-lived experiments or for letting Claude work in an isolated scratch worktree that won't outlive the session.
+`maudebox new <name>` creates a fresh jj workspace or git worktree off an existing project and launches `maudebox` on it. By default the workspace persists after the container exits, just like running `maudebox <path>` would — `new` is essentially `mkdir-and-enter`. Pass `--ephemeral` for short-lived scratch workspaces that should be torn down on exit.
 
 ```sh
-maudebox new feature-x                       # ephemeral, from cwd
-maudebox new feature-x /path/to/project      # ephemeral, from a specific project
+maudebox new feature-x                       # new workspace from cwd
+maudebox new feature-x /path/to/project      # new workspace off a specific project
 maudebox new feature-x --from main           # start from a specific revision
 maudebox new feature-x --path /tmp/scratch   # custom target path
-maudebox new feature-x --keep                # preserve workspace + overlay on exit
+maudebox new feature-x --ephemeral           # tear down workspace + overlay on exit
 ```
 
 Defaults:
@@ -91,22 +91,24 @@ Defaults:
 - **Starting revision:** jj's `@-` for jj, `HEAD` for git. Override with `--from REV`. For git, a new branch named `<name>` is created at that revision.
 - **VCS choice:** jj is preferred when both `.jj/` and `.git` are present (colocated repos).
 
-Cleanup runs through an `EXIT` trap, so it fires on normal exit, errors, and Ctrl-C alike. On cleanup:
+#### Ephemeral mode
 
-- **jj:** `jj workspace forget <name>` and `rm -rf <target>`. The change at `@` in that workspace becomes a regular commit in jj's op log, so committed work is recoverable via `jj op log` / `jj op restore`.
-- **git:** `git worktree remove --force <target>` and `git branch -D <name>`. Branch tip commits remain reachable via the reflog (default 90 days).
+With `--ephemeral`, an `EXIT` trap fires on normal exit, errors, and Ctrl-C alike, and:
+
+- **jj:** runs `jj workspace forget <name>` and `rm -rf <target>`. The change at `@` in that workspace becomes a regular commit in jj's op log, so committed work is recoverable via `jj op log` / `jj op restore`.
+- **git:** runs `git worktree remove --force <target>` and `git branch -D <name>`. Branch tip commits remain reachable via the reflog (default 90 days).
 - **Overlay volume:** the per-worktree `maudebox-overlay-…` volume is removed.
 
-Uncommitted working-copy changes are **not** preserved by ephemeral cleanup. Pass `--keep` if you might want to come back to the workspace, or commit before exiting the container.
+Uncommitted working-copy changes are **not** preserved. Commit before exiting the container if you might want them later.
 
-#### Changing your mind mid-session
+##### Changing your mind mid-session
 
-If you've launched an ephemeral instance without `--keep` and later decide you'd rather hold onto it, you can keep it without leaving the running container:
+If you've launched an ephemeral instance and later decide you'd rather hold onto it, you can disarm the cleanup without leaving the running container:
 
 - **From inside the container:** run `maudebox-keep`.
 - **From the host:** run `maudebox keep <id-or-name>`, where the argument is the container ID (as shown by `maudebox list`), the instance basename, or the original name passed to `maudebox new`.
 
-Either way, when the container exits its workspace and Maven overlay are left in place instead of being deleted. Both are no-ops for non-ephemeral instances. After the container exits, a kept workspace is just a regular jj workspace / git worktree — running `maudebox` on it again is no longer ephemeral.
+Either way, when the container exits its workspace and Maven overlay are left in place instead of being deleted. Both are no-ops for non-ephemeral instances. After the container exits, a kept workspace is just a regular jj workspace / git worktree.
 
 ## How it works
 

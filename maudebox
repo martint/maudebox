@@ -27,7 +27,7 @@ EPHEMERAL_NAME=""
 usage() {
     cat <<'EOF'
 Usage: maudebox [--clean] [--tag TAG] [project-dir] [command...]
-       maudebox new <name> [project-dir] [--path PATH] [--from REV] [--keep]
+       maudebox new <name> [project-dir] [--path PATH] [--from REV] [--ephemeral]
        maudebox list
        maudebox keep <id-or-name>
 
@@ -51,15 +51,17 @@ Arguments:
 Subcommands:
   new <name>    create a jj workspace or git worktree from project-dir
                 (default: cwd) and launch maudebox on it, sharing the
-                parent project's Claude auto-memory dir. By default the
-                workspace/worktree and its overlay volume are removed when
-                the container exits.
+                parent project's Claude auto-memory dir. The workspace and
+                its overlay volume persist after the container exits, just
+                like `maudebox <path>`.
                   --path PATH   target path
                                 (default: <project>/../<basename>.<name>)
                   --from REV    starting revision
                                 (default: jj @-, git HEAD)
-                  --keep        preserve the workspace/worktree and overlay
-                                volume after the container exits
+                  --ephemeral   tear down the workspace/worktree and its
+                                overlay volume when the container exits
+                                (use `maudebox-keep` / `maudebox keep` to
+                                disarm mid-session)
   list          list every registered maudebox instance (anything with an
                 overlay volume), showing its container ID if running, its
                 running/stopped status, instance name, ephemeral status, and
@@ -79,10 +81,10 @@ Examples:
   maudebox . mvnd verify                 # run a build
   maudebox . claude                      # start Claude Code
   maudebox --clean /path/to/myproject    # delete that worktree's overlay volume
-  maudebox new feature-x                 # ephemeral workspace from cwd
-  maudebox new feature-x /path/to/proj   # ephemeral workspace from a project
+  maudebox new feature-x                 # new workspace from cwd (kept on exit)
+  maudebox new feature-x /path/to/proj   # new workspace from a specific project
   maudebox new feature-x --from main     # start from a specific revision
-  maudebox new feature-x --keep          # keep workspace/overlay after exit
+  maudebox new feature-x --ephemeral     # tear down workspace/overlay on exit
   maudebox list                          # list registered maudebox instances
   maudebox keep feature-x                # don't tear down on exit (running instance)
 EOF
@@ -110,13 +112,14 @@ compute_state_dir() {
 }
 
 # ── `maudebox new` ────────────────────────────────────────────────────────────
-# Create a jj workspace or git worktree from a source project, run maudebox
-# on it, and (unless --keep is given) tear down the workspace/worktree and
-# its overlay volume on exit. jj is preferred when both .jj and .git are
-# present (colocated repos). State for the EXIT trap is held in script-scope
-# globals (NEW_*) so the cleanup function can see them when bash fires the
-# trap during shell teardown.
-NEW_NAME=""; NEW_TARGET=""; NEW_SOURCE=""; NEW_KIND=""; NEW_KEEP=false
+# Create a jj workspace or git worktree from a source project and run
+# maudebox on it. By default the workspace persists after the container
+# exits, like `maudebox <path>` does. With --ephemeral, the workspace and
+# its overlay volume are torn down on exit. jj is preferred when both .jj
+# and .git are present (colocated repos). State for the EXIT trap is held
+# in script-scope globals (NEW_*) so the cleanup function can see them
+# when bash fires the trap during shell teardown.
+NEW_NAME=""; NEW_TARGET=""; NEW_SOURCE=""; NEW_KIND=""; NEW_EPHEMERAL=false
 
 cmd_new() {
     local from_rev=""
@@ -124,11 +127,11 @@ cmd_new() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -h|--help) usage; exit 0 ;;
-            --path)    NEW_TARGET="$2"; shift 2 ;;
-            --from)    from_rev="$2";   shift 2 ;;
-            --keep)    NEW_KEEP=true;   shift ;;
-            -*)        echo "Unknown option: $1" >&2; exit 1 ;;
+            -h|--help)   usage; exit 0 ;;
+            --path)      NEW_TARGET="$2";    shift 2 ;;
+            --from)      from_rev="$2";      shift 2 ;;
+            --ephemeral) NEW_EPHEMERAL=true; shift ;;
+            -*)          echo "Unknown option: $1" >&2; exit 1 ;;
             *)
                 if [ -z "$NEW_NAME" ]; then
                     NEW_NAME="$1"
@@ -172,12 +175,18 @@ cmd_new() {
         exit 1
     fi
 
-    if ! $NEW_KEEP; then
+    local inner_args=( --tag "$IMAGE_NAME" --memory-from "$NEW_SOURCE" )
+    if $NEW_EPHEMERAL; then
+        # Pass --ephemeral-name only on actually-ephemeral runs so the inner
+        # invocation labels the container as such and bind-mounts the state
+        # dir for the keep mechanism. Non-ephemeral `maudebox new` looks
+        # exactly like `maudebox <path>` from the inner side.
         trap _maudebox_new_cleanup EXIT
+        inner_args+=( --ephemeral-name "$NEW_NAME" )
     fi
 
     local rc=0
-    "$0" --tag "$IMAGE_NAME" --memory-from "$NEW_SOURCE" --ephemeral-name "$NEW_NAME" "$NEW_TARGET" || rc=$?
+    "$0" "${inner_args[@]}" "$NEW_TARGET" || rc=$?
     exit $rc
 }
 
