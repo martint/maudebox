@@ -2,7 +2,7 @@
 FROM eclipse-temurin:25-jdk-noble
 
 ARG MVND_VERSION=1.0.5
-ARG JJ_VERSION=0.34.0
+ARG JJ_VERSION=0.41.0
 
 # The container starts as root for the privileged setup (overlay mount, volume
 # chowns) and on Linux drops to the host UID before exec'ing the user command —

@@ -10,11 +10,11 @@ The repo contains only the container itself: `Dockerfile`, `build.sh`, `maudebox
 
 ## Common commands
 
-Build the image (defaults: `mvnd 1.0.5`, `jj 0.34.0`, tag `maudebox`):
+Build the image (defaults: `mvnd 1.0.5`, `jj 0.41.0`, tag `maudebox`):
 
 ```
 ./build.sh
-./build.sh --mvnd-version 1.0.5 --jj-version 0.34.0 --tag maudebox
+./build.sh --mvnd-version 1.0.5 --jj-version 0.41.0 --tag maudebox
 ```
 
 Run a container against a host project directory:

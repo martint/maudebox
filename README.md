@@ -45,10 +45,10 @@ As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`,
 Options:
 
 ```sh
-./build.sh --mvnd-version 1.0.5 --jj-version 0.34.0 --tag maudebox
+./build.sh --mvnd-version 1.0.5 --jj-version 0.41.0 --tag maudebox
 ```
 
-Defaults: `mvnd 1.0.5`, `jj 0.34.0`, image tag `maudebox`.
+Defaults: `mvnd 1.0.5`, `jj 0.41.0`, image tag `maudebox`.
 
 ## Run
 

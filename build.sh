@@ -6,13 +6,13 @@
 #
 # Defaults:
 #   --mvnd-version  1.0.5
-#   --jj-version    0.34.0
+#   --jj-version    0.41.0
 #   --tag           maudebox
 
 set -euo pipefail
 
 MVND_VERSION="1.0.5"
-JJ_VERSION="0.34.0"
+JJ_VERSION="0.41.0"
 TAG="maudebox"
 
 # ── parse flags ───────────────────────────────────────────────────────────────
