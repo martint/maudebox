@@ -122,16 +122,13 @@ RUN set -eux; \
     && chmod +x /usr/local/bin/jj \
     && rm /tmp/jj.tar.gz
 
-# ── overlay directories (created root-owned, mounted at runtime) ──────────────
-# /m2-host    – bind-mount of host ~/.m2 (ro lower layer)
-# /m2-upper   – named-volume root; must be on a non-overlay fs because
-#               overlayfs rejects another overlay as upperdir/workdir. The
-#               entrypoint creates ./upper and ./work inside it.
-# /root/.m2   – the merged mount point
-# The project itself is bind-mounted by the maudebox wrapper at its *host* path (so jj/git
-# worktree metadata resolves), and the entrypoint adds a /root/<basename>
-# symlink pointing at it.
-RUN mkdir -p /m2-host /m2-upper /root/.m2
+# Overlay mount points (e.g. /maudebox/overlay-N/{lower,upper}) are created
+# at runtime by Docker when the wrapper passes -v for them, so no build-time
+# mkdir is needed. The merged overlayfs target is whatever path the user
+# picks in the mount spec; the entrypoint creates it on demand. The project
+# itself is bind-mounted by the maudebox wrapper at its *host* path (so
+# jj/git worktree metadata resolves), and the entrypoint adds a
+# /root/<basename> symlink pointing at it.
 
 # ── shell prompt with jj/git VCS info ─────────────────────────────────────────
 # /etc/bash.bashrc is sourced first by interactive non-login shells; /root/.bashrc

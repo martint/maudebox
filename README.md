@@ -24,7 +24,7 @@ Auth material is held back deliberately: `~/.ssh`, `~/.git-credentials`, and `~/
 
 Maven's local repository (`~/.m2/repository`) is a shared mutable store. When two builds running concurrently both `mvn install` a snapshot under the same coordinates, the last writer wins and the other build silently picks up the wrong artifact. With multiple Claude sessions iterating on different feature branches in different worktrees of the same project, this is a near-constant footgun: session A installs `1.2.3-SNAPSHOT` from its branch, session B's compile then resolves A's jars, and B's "test failure" has nothing to do with B's code.
 
-`maudebox` gives **each worktree its own writable Maven repository layer** via overlayfs. The host's `~/.m2` is the read-only lower layer, so cached third-party artifacts are shared and warm. The upper layer — where every `install`, every downloaded snapshot, every locally built jar lands — is a Docker named volume keyed to that specific worktree's path. Two concurrent `maudebox` containers on two worktrees of the same repo each see their own `1.2.3-SNAPSHOT`, with zero cross-talk and zero mutation of the host's `~/.m2`.
+`maudebox` can give **each worktree its own writable Maven repository layer** via overlayfs — opt in by adding an `overlay` mount in your config (see "Extra bind mounts" below; typically `~/.m2:~/.m2:overlay`). The host source becomes the read-only lower layer, so cached third-party artifacts are shared and warm. The upper layer — where every `install`, every downloaded snapshot, every locally built jar lands — is a Docker named volume keyed to that specific worktree's path. Two concurrent `maudebox` containers on two worktrees of the same repo each see their own `1.2.3-SNAPSHOT`, with zero cross-talk and zero mutation of the host's `~/.m2`.
 
 ### Shared logins and global config
 
@@ -33,7 +33,7 @@ As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`,
 ## Prerequisites
 
 - Docker (tested with OrbStack on macOS; should work with Docker Desktop and native Linux Docker too).
-- A host with `~/.m2` (optional — used as a read-only cache layer if present).
+- A host with `~/.m2` (optional — only used if you add an `overlay` mount for it).
 - A host with Claude Code installed (optional — its global config under `~/.claude/` is bind-mounted into the container if present).
 
 ## Build
@@ -75,11 +75,11 @@ If the project is a **jj workspace** or **git worktree**, `maudebox` reads its m
 
 ### Extra bind mounts
 
-Beyond the project tree, the `~/.m2` overlay, and the Claude/gh state volumes, you can declare additional host paths to expose into the container — `~/.aws`, a notes directory, a shared cache, anything you'd otherwise have to add via raw `docker run -v`.
+By default `maudebox` only sets up the project tree and the Claude/gh state volumes. Any other host path you want exposed inside the container — `~/.m2`, `~/.aws`, a notes directory, a shared cache — is declared explicitly.
 
 Two equivalent ways:
 
-- **Command line:** `--mount HOST:CONTAINER[:ro|rw]`, repeatable.
+- **Command line:** `--mount HOST:CONTAINER[:ro|rw|overlay]`, repeatable.
 
   ```sh
   maudebox --mount ~/.aws:~/.aws:ro --mount ~/Documents/notes:~/notes
@@ -89,12 +89,15 @@ Two equivalent ways:
 
   ```toml
   mounts = [
+      "~/.m2:~/.m2:overlay",
       "~/.aws:~/.aws:ro",
       "~/Documents/notes:~/notes",
   ]
   ```
 
-In both cases the spec syntax is `HOST:CONTAINER[:ro|rw]`. A leading `~` on the host side expands to `$HOME` (your host home); on the container side it expands to `/root` (the container's home, fixed by the entrypoint). Mode defaults to `rw`. CLI mounts are forwarded to the inner instance when used with `maudebox new`.
+In both cases the spec syntax is `HOST:CONTAINER[:ro|rw|overlay]`. A leading `~` on the host side expands to `$HOME` (your host home); on the container side it expands to `/root` (the container's home, fixed by the entrypoint). Mode defaults to `rw`. CLI mounts are forwarded to the inner instance when used with `maudebox new`.
+
+**Overlay mode** layers a per-worktree writable Docker volume over the read-only host source, giving each worktree isolated writes while sharing the host content as warm starting state — handy for `~/.m2` (Maven), `~/.cargo`, `~/.gradle`, `~/.npm`, etc. Repeat with different targets to set up multiple overlays in one container; each one creates its own per-worktree volume.
 
 ### Spawning a new workspace or worktree
 
@@ -135,17 +138,19 @@ Either way, when the container exits its workspace and Maven overlay are left in
 
 ## How it works
 
-### Maven cache
+### Overlay mounts (typically the Maven cache, optionally more)
 
-The container mounts an overlayfs at `~/.m2` with three layers:
+For each mount spec that uses mode `overlay` (e.g. `~/.m2:~/.m2:overlay`), the container gets an overlayfs at the target path with three layers:
 
-| Layer    | Source                                      | Mode |
-| -------- | ------------------------------------------- | ---- |
-| lower    | host's `~/.m2`                              | ro   |
-| upper    | per-worktree Docker volume (`maudebox-overlay-…`) | rw   |
-| workdir  | sibling subdir in the same volume           | rw   |
+| Layer    | Source                                                  | Mode |
+| -------- | ------------------------------------------------------- | ---- |
+| lower    | the host source path                                    | ro   |
+| upper    | per-worktree+per-target Docker volume (`maudebox-overlay-…-<target-hash>`) | rw   |
+| workdir  | sibling subdir in the same volume                       | rw   |
 
-Effect: builds inside the container see all the artifacts already cached on the host, but anything they download or `install` lands in a worktree-scoped volume. Concurrent containers for different worktrees don't collide. The host's `~/.m2` is never mutated.
+Effect: builds inside the container see all the artifacts already cached on the host, but anything they download or `install` lands in a worktree-scoped volume. Concurrent containers for different worktrees don't collide. The host source is never mutated. You can declare more than one — e.g. one for Maven, one for Cargo — and each gets its own per-worktree volume. Without any `overlay` mount declared, no overlay is set up and no volume is created — `maudebox` is just a project bind-mount + state volumes.
+
+`maudebox list` aggregates by project and shows an `OVERLAYS` count column. `maudebox --clean <path>` removes every overlay volume tied to that project in one shot.
 
 The per-worktree volume name is derived from the basename of the project directory plus a SHA-256 prefix of its full path:
 
@@ -182,9 +187,9 @@ This means: **log in to Claude Code (and `gh`) once inside any container**, and 
 
 ### Container user
 
-The container runs as **root** (UID 0). This is intentional: OrbStack and similar virtiofs setups root-squash the host bind-mounts, so files in `/m2-host` (and your project source) appear as `uid=0` inside the container. Overlayfs preserves that UID on copy-up, which means a non-root container user can't write to anything pre-existing in the host's `~/.m2`. Running as root sidesteps the whole class of "permission denied on file inherited from the host" failures (mvnd registry, Aether lock files, install-plugin tmp files, etc.).
+The container runs as **root** (UID 0) on macOS. This is intentional: OrbStack and similar virtiofs setups root-squash the host bind-mounts, so files in the lower layer of an overlay mount appear as `uid=0` inside the container. Overlayfs preserves that UID on copy-up, which means a non-root container user couldn't write to anything pre-existing in the host source. Running as root sidesteps the whole class of "permission denied on file inherited from the host" failures (mvnd registry, Aether lock files, install-plugin tmp files, etc.). On Linux the entrypoint drops privileges to the host UID after the privileged setup steps are done.
 
-Everything lives under `/root`: the Maven cache (`/root/.m2`), the Claude config (`/root/.claude`), and a `/root/<basename>` symlink to your worktree's host path. Files written to bind-mounted paths land back on the host owned by your host user, courtesy of virtiofs UID translation.
+Everything lives under `/root`: the Claude config (`/root/.claude`), an opt-in overlay target (typically `/root/.m2`), and a `/root/<basename>` symlink to your worktree's host path. Files written to bind-mounted paths land back on the host owned by your host user, courtesy of virtiofs UID translation (macOS) or the privilege drop (Linux).
 
 ## Cleanup
 

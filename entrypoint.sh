@@ -1,14 +1,13 @@
 #!/bin/bash
-# entrypoint.sh – mounts overlayfs over ~/.m2, sets up the persistent Claude
-# state symlink, then exec's the user command. Runs as root for the parts that
-# need it (overlay mount, /etc/passwd rewrite, chowns); on Linux drops to the
-# host UID/GID before exec so writes to bind-mounted host paths don't end up
-# root-owned on the host.
+# entrypoint.sh – optionally mounts a per-worktree overlayfs at a user-chosen
+# path, sets up the persistent Claude state symlink, then exec's the user
+# command. Runs as root for the parts that need it (overlay mount,
+# /etc/passwd rewrite, chowns); on Linux drops to the host UID/GID before
+# exec so writes to bind-mounted host paths don't end up root-owned on the
+# host.
 #
 # Requires:
 #   --cap-add SYS_ADMIN  (or --privileged)
-#   -v ~/.m2:/m2-host:ro
-#   -v <per-worktree>:/m2-upper
 #   --mount type=volume,src=maudebox-state,dst=/root/.claude,volume-subpath=claude
 #   --mount type=volume,src=maudebox-state,dst=/root/.config/gh,volume-subpath=gh
 #       (both optional; together they persist Claude + gh login)
@@ -17,26 +16,42 @@
 #   HOST_UID, HOST_GID              (env vars; if set, drop privileges to those
 #                                    before exec'ing the user command — Linux only)
 #
+# Optional (set together by the wrapper for each spec that uses overlay mode):
+#   -v <host_path>:/maudebox/overlay-N/lower:ro
+#   -v <per-worktree-volume>:/maudebox/overlay-N/upper
+#   MAUDEBOX_OVERLAYS=<lower>:<upper>:<target>\n... (one triple per overlay)
+#       The entrypoint loops over these and mounts each overlayfs. Without
+#       this env var, no overlay setup happens at all.
+#
 set -euo pipefail
 
 HOME_DIR="${HOME:-/root}"
-M2_MOUNT="$HOME_DIR/.m2"
 
-# ── overlay setup ─────────────────────────────────────────────────────────────
-if mountpoint -q "$M2_MOUNT"; then
-    echo "[entrypoint] $M2_MOUNT already mounted, skipping overlayfs setup"
-elif [ -d /m2-host ] && [ "$(ls -A /m2-host 2>/dev/null)" ]; then
-    echo "[entrypoint] Setting up overlayfs: lowerdir=/m2-host -> $M2_MOUNT"
-    # upperdir and workdir must be on the same filesystem AND that fs must not
-    # itself be overlayfs. /m2-upper is a Docker named volume (host-fs backed),
-    # so we put both subdirs inside it.
-    mkdir -p /m2-upper/upper /m2-upper/work
-    mount -t overlay overlay \
-        -o "lowerdir=/m2-host,upperdir=/m2-upper/upper,workdir=/m2-upper/work" \
-        "$M2_MOUNT"
-    echo "[entrypoint] overlayfs mounted"
-else
-    echo "[entrypoint] /m2-host is empty or absent – skipping overlay"
+# ── overlay setup (opt-in, multi) ─────────────────────────────────────────────
+# The wrapper sets this up only for mount specs that requested `overlay` mode.
+# MAUDEBOX_OVERLAYS holds one `lower:upper:target` triple per line. Without
+# any overlays, /maudebox/overlay-* isn't even mounted and this block is a
+# no-op.
+if [ -n "${MAUDEBOX_OVERLAYS:-}" ]; then
+    while IFS=':' read -r lower upper target; do
+        [ -n "$lower" ] || continue
+        if mountpoint -q "$target"; then
+            echo "[entrypoint] $target already mounted, skipping"
+            continue
+        fi
+        if [ ! -d "$lower" ] || [ -z "$(ls -A "$lower" 2>/dev/null)" ]; then
+            echo "[entrypoint] $lower is empty/missing – skipping overlay -> $target"
+            continue
+        fi
+        echo "[entrypoint] Setting up overlayfs: $lower -> $target"
+        # upperdir and workdir must be on the same filesystem AND that fs must
+        # not itself be overlayfs. The upper is a Docker named volume (host-fs
+        # backed), so we put both subdirs inside it.
+        mkdir -p "$target" "$upper/upper" "$upper/work"
+        mount -t overlay overlay \
+            -o "lowerdir=$lower,upperdir=$upper/upper,workdir=$upper/work" \
+            "$target"
+    done <<< "$MAUDEBOX_OVERLAYS"
 fi
 
 # ── Claude state symlink ──────────────────────────────────────────────────────
@@ -93,12 +108,16 @@ if [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ] && [ "$HOST_UID" != "0" ]; t
     # the dropped-privilege user can't write anything. -xdev keeps find from
     # crossing into bind-mounted host config (e.g. /root/.claude/CLAUDE.md,
     # which lives on a different fs and would refuse chown anyway). The
-    # ! -uid test makes repeat runs no-ops.
-    for d in /m2-upper /root/.claude /root/.config/gh /root; do
+    # ! -uid test makes repeat runs no-ops. The /maudebox/overlay-*/upper
+    # glob covers any per-overlay upper-layer volumes mounted by the wrapper;
+    # nullglob keeps it harmless when no overlays are active.
+    shopt -s nullglob
+    for d in /maudebox/overlay-*/upper /root/.claude /root/.config/gh /root; do
         [ -e "$d" ] || continue
         find "$d" -xdev \! -uid "$HOST_UID" \
             -exec chown -h "${HOST_UID}:${HOST_GID}" {} + 2>/dev/null || true
     done
+    shopt -u nullglob
 
     exec setpriv --reuid="$HOST_UID" --regid="$HOST_GID" --clear-groups -- "$@"
 fi

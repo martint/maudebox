@@ -26,6 +26,8 @@ EPHEMERAL_NAME=""
 EXTRA_MOUNTS=()
 CONTAINER_HOME="/root"   # fixed by the entrypoint; ~ on the container side
                          # of a --mount/config spec expands to this
+OVERLAY_HOSTS=()         # parallel arrays populated by build_mount_arg for
+OVERLAY_TARGETS=()       # each spec that uses mode `overlay`
 
 # XDG Base Directory: config under $XDG_CONFIG_HOME (default ~/.config),
 # state already lives under $XDG_STATE_HOME (default ~/.local/state) via
@@ -41,24 +43,29 @@ Usage: maudebox [--clean] [--tag TAG] [project-dir] [command...]
 
 Launch a maudebox container for a host project directory. The project (and
 its base repo, if it's a jj workspace or git worktree) is bind-mounted at
-its host path inside the container so VCS metadata still resolves. Maven's
-local repo is layered: the host's ~/.m2 is exposed read-only beneath a
-per-worktree overlay volume so writes stay isolated per worktree.
+its host path inside the container so VCS metadata still resolves. Extra
+host paths can be exposed via --mount or ~/.maudebox; any of them can use
+mode `overlay` to layer a per-worktree writable upper over a read-only
+host lower (typically used for ~/.m2 to isolate Maven snapshots per
+worktree without mutating the host cache).
 
 Options:
-  --clean              remove the overlay volume for this worktree and exit
+  --clean              remove every overlay volume tied to this project and exit
   --tag TAG            image tag to run (default: maudebox)
   --memory-from PATH   share Claude's auto-memory dir with another project
                        (host source keyed to PATH, container target unchanged)
   --mount SPEC         add an extra bind mount, where SPEC is
-                         HOST_PATH:CONTAINER_PATH[:ro|rw]
+                         HOST_PATH:CONTAINER_PATH[:ro|rw|overlay]
                        Leading `~` on the host side expands to $HOME, on the
-                       container side to /root. Mode defaults to rw. Repeat
-                       for multiple mounts. Mounts can also be declared in
+                       container side to /root. Mode defaults to rw. Mode
+                       `overlay` layers a per-worktree writable upper (Docker
+                       volume) over a read-only host lower — repeat with
+                       different targets to set up multiple overlays. Mounts
+                       can also be declared in
                        $XDG_CONFIG_HOME/maudebox/config.toml (TOML):
                          mounts = [
+                             "~/.m2:~/.m2:overlay",
                              "~/.aws:~/.aws:ro",
-                             "~/Documents/notes:~/notes",
                          ]
   -h, --help           show this help and exit
 
@@ -80,10 +87,10 @@ Subcommands:
                                 overlay volume when the container exits
                                 (use `maudebox-keep` / `maudebox keep` to
                                 disarm mid-session)
-  list          list every registered maudebox instance (anything with an
-                overlay volume), showing its container ID if running, its
-                running/stopped status, instance name, ephemeral status, and
-                project path.
+  list          list every registered maudebox instance (anything with at
+                least one overlay volume), showing its container ID if
+                running, its running/stopped status, instance name,
+                ephemeral status, overlay count, and project path.
   keep <id-or-name>
                 for a running ephemeral instance, prevent its workspace and
                 Maven overlay from being deleted when the container exits.
@@ -109,15 +116,26 @@ Examples:
 EOF
 }
 
-# ── overlay volume name for a project path ───────────────────────────────────
-# Combines the directory basename (human-readable) with a short hash of the
-# full path (collision-proof), e.g. maudebox-overlay-myproject-a3f8c21b
+# ── volume / state-dir naming ────────────────────────────────────────────────
+# A project key combines the basename (human-readable) with a short hash of
+# the full path (collision-proof), e.g. `myproject-a3f8c21b`. Used to scope
+# the per-instance state dir for ephemeral runs.
 compute_volume_name() {
     local dir="$1"
     local dir_name path_hash
     dir_name="$(basename "$dir")"
     path_hash="$(echo "$dir" | sha256sum | cut -c1-8)"
     echo "maudebox-overlay-${dir_name}-${path_hash}"
+}
+
+# Each overlay mount on a project gets its own Docker volume, named with
+# the project key plus a short hash of the container target so multiple
+# overlays on the same project don't collide.
+compute_overlay_volume() {
+    local project="$1" target="$2"
+    local target_hash
+    target_hash="$(echo "$target" | sha256sum | cut -c1-8)"
+    echo "$(compute_volume_name "$project")-${target_hash}"
 }
 
 # ── per-instance state dir on the host ───────────────────────────────────────
@@ -173,6 +191,15 @@ parse_toml_mounts() {
 # and on the container side to $CONTAINER_HOME. Mode defaults to rw. Output
 # goes into the array named in the first arg (bash 3.2-compatible — no
 # nameref, just eval-style append).
+#
+# Mode `overlay` is special: it asks the wrapper to set up a per-worktree
+# overlayfs at the container target (lowerdir = the host path, ro;
+# upperdir = a Docker volume named per-project + per-target). Multiple
+# overlay specs in one invocation are allowed; we collect each into the
+# OVERLAY_HOSTS / OVERLAY_TARGETS arrays and the run section materialises
+# the corresponding volumes, mounts, and entrypoint env var. The actual
+# `-v` flags for non-overlay mounts get appended to the array named in
+# the first arg.
 build_mount_arg() {
     local out_array="$1" spec="$2"
     local src dst mode
@@ -180,6 +207,23 @@ build_mount_arg() {
     : "${mode:=rw}"
     [[ "$src" == "~"* ]] && src="$HOME${src:1}"
     [[ "$dst" == "~"* ]] && dst="${CONTAINER_HOME}${dst:1}"
+
+    if [ "$mode" = "overlay" ]; then
+        # Reject a duplicate overlay target — overlayfs would refuse to
+        # double-mount on the same dir anyway, and silently ignoring the
+        # repeat would mask a config error.
+        local i
+        for ((i=0; i<${#OVERLAY_TARGETS[@]}; i++)); do
+            if [ "${OVERLAY_TARGETS[$i]}" = "$dst" ]; then
+                echo "Duplicate overlay target: $dst (sources: ${OVERLAY_HOSTS[$i]} and $src)" >&2
+                exit 1
+            fi
+        done
+        OVERLAY_HOSTS+=( "$src" )
+        OVERLAY_TARGETS+=( "$dst" )
+        return
+    fi
+
     eval "${out_array}+=( -v \"\$src:\$dst:\$mode\" )"
 }
 
@@ -333,8 +377,8 @@ cmd_list() {
     } | awk -F'\037' '$1 != "" {print $1}' | sort -u )"
 
     {
-        printf 'ID\tSTATUS\tINSTANCE\tEPHEMERAL\tPATH\n'
-        local project vol_sample run_sample _proj instance ephemeral id status state_dir
+        printf 'ID\tSTATUS\tINSTANCE\tEPHEMERAL\tOVERLAYS\tPATH\n'
+        local project vol_sample run_sample _proj instance ephemeral id status state_dir overlays
         while IFS= read -r project; do
             [ -z "$project" ] && continue
             instance=""; ephemeral=""; id=""
@@ -356,6 +400,10 @@ cmd_list() {
                 : "${ephemeral:=$r_ephemeral}"
             fi
 
+            # Count overlay volumes for this project (0 when running with no
+            # overlay configured).
+            overlays="$(printf '%s\n' "$volumes" | awk -F'\037' -v p="$project" '$1==p' | wc -l | tr -d ' ')"
+
             if [ -n "$id" ]; then
                 status="running"
             else
@@ -370,7 +418,7 @@ cmd_list() {
                 [ -e "$state_dir/keep" ] && ephemeral="false"
             fi
 
-            printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$status" "${instance:-?}" "${ephemeral:--}" "$project"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$status" "${instance:-?}" "${ephemeral:--}" "$overlays" "$project"
         done <<< "$projects"
     } | column -t -s $'\t'
 }
@@ -494,16 +542,20 @@ detect_vcs_base() {
 
 VCS_BASE="$(detect_vcs_base "$PROJECT_DIR")"
 
-# ── per-worktree volume name ──────────────────────────────────────────────────
-UPPER_VOLUME="$(compute_volume_name "$PROJECT_DIR")"
-
 # ── --clean ───────────────────────────────────────────────────────────────────
+# Remove every overlay volume tied to this project. We filter by the
+# `maudebox.project` label rather than the volume name pattern because a
+# project can own multiple overlay volumes (one per overlay target) and the
+# label is the canonical link.
 if $CLEAN; then
-    if docker volume inspect "$UPPER_VOLUME" &>/dev/null; then
-        docker volume rm "$UPPER_VOLUME"
-        echo "Removed volume: $UPPER_VOLUME"
+    volumes="$(docker volume ls --filter label=maudebox.project="$PROJECT_DIR" --format '{{.Name}}')"
+    if [ -z "$volumes" ]; then
+        echo "No overlay volumes found for: $PROJECT_DIR"
     else
-        echo "No volume found for this worktree: $UPPER_VOLUME"
+        while IFS= read -r v; do
+            docker volume rm "$v" > /dev/null
+            echo "Removed volume: $v"
+        done <<< "$volumes"
     fi
     exit 0
 fi
@@ -612,7 +664,36 @@ else
     LABELS+=( --label "maudebox.ephemeral=false" )
 fi
 
-docker volume create "${LABELS[@]}" "$UPPER_VOLUME" > /dev/null
+# For each overlay mount spec, materialize a per-worktree+per-target upper-
+# layer volume (labeled the same as the container, plus a per-volume
+# `maudebox.overlay-target` label so `--clean` can find it later) and
+# assemble:
+#   - one `-v <host>:/maudebox/overlay-N/lower:ro` for each lowerdir,
+#   - one `-v <volume>:/maudebox/overlay-N/upper` for each upperdir,
+#   - one MAUDEBOX_OVERLAYS env var: newline-separated `lower:upper:target`
+#     triples for the entrypoint to iterate over and mount.
+# No overlay spec → no volumes created → `--clean` is a silent no-op.
+OVERLAY_ARGS=()
+OVERLAY_ENV=()
+overlay_count="${#OVERLAY_TARGETS[@]}"
+if [ "$overlay_count" -gt 0 ]; then
+    overlay_env_val=""
+    for ((i=0; i<overlay_count; i++)); do
+        n=$((i + 1))
+        src="${OVERLAY_HOSTS[$i]}"
+        dst="${OVERLAY_TARGETS[$i]}"
+        vol="$(compute_overlay_volume "$PROJECT_DIR" "$dst")"
+        docker volume create "${LABELS[@]}" \
+            --label "maudebox.overlay-target=$dst" \
+            "$vol" > /dev/null
+        OVERLAY_ARGS+=(
+            -v "$src:/maudebox/overlay-$n/lower:ro"
+            -v "$vol:/maudebox/overlay-$n/upper"
+        )
+        overlay_env_val+="/maudebox/overlay-$n/lower:/maudebox/overlay-$n/upper:$dst"$'\n'
+    done
+    OVERLAY_ENV=( -e "MAUDEBOX_OVERLAYS=$overlay_env_val" )
+fi
 
 # Mount the project (and its base repo, if it's a jj/git worktree) at their
 # host paths inside the container so absolute path references in the worktree
@@ -629,7 +710,8 @@ fi
 # host user. To avoid root-owned files in the host project tree on Linux, pass
 # the host UID/GID and let the entrypoint drop privileges before exec'ing the
 # user command. On macOS we leave them unset so the container keeps running as
-# root (overlay copy-up of ~/.m2 depends on it; see CLAUDE.md).
+# root (overlay copy-up depends on it when an overlay mount is in use; see
+# CLAUDE.md).
 USER_ENV=()
 if [[ "$(uname -s)" == "Linux" ]]; then
     USER_ENV=( -e "HOST_UID=$(id -u)" -e "HOST_GID=$(id -g)" )
@@ -638,21 +720,23 @@ fi
 echo "Image    : $IMAGE_NAME"
 echo "Worktree : $PROJECT_DIR"
 [ -n "$VCS_BASE" ] && [ "$VCS_BASE" != "$PROJECT_DIR" ] && echo "VCS base : $VCS_BASE"
-echo "Volume   : $UPPER_VOLUME"
+for ((i=0; i<${#OVERLAY_TARGETS[@]}; i++)); do
+    echo "Overlay  : ${OVERLAY_HOSTS[$i]} -> ${OVERLAY_TARGETS[$i]}"
+done
 
 # `"${arr[@]+"${arr[@]}"}"` is the bash-3.2-safe form for expanding a possibly-
 # empty array under `set -u` — plain `"${arr[@]}"` errors on macOS bash 3.2
-# when the array is empty. USER_ENV is empty on macOS; EPHEMERAL_MOUNT is
-# empty for any non-ephemeral run.
+# when the array is empty. USER_ENV is empty on macOS; EPHEMERAL_MOUNT and
+# OVERLAY_* are empty when the corresponding feature isn't requested.
 docker run --rm -it \
     --cap-add SYS_ADMIN \
     --security-opt apparmor=unconfined \
     -e "HOST_PROJECT_DIR=$PROJECT_DIR" \
     -e "MAUDEBOX_INSTANCE=$INSTANCE_NAME" \
     "${USER_ENV[@]+"${USER_ENV[@]}"}" \
+    "${OVERLAY_ENV[@]+"${OVERLAY_ENV[@]}"}" \
     "${LABELS[@]}" \
-    -v "$HOME/.m2:/m2-host:ro" \
-    -v "${UPPER_VOLUME}:/m2-upper" \
+    "${OVERLAY_ARGS[@]+"${OVERLAY_ARGS[@]}"}" \
     "${EPHEMERAL_MOUNT[@]+"${EPHEMERAL_MOUNT[@]}"}" \
     "${PROJECT_MOUNTS[@]}" \
     "${CLAUDE_MOUNTS[@]}" \

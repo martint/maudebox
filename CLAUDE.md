@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A Docker-based dev environment that ships JDK 25 (Temurin), `mvnd` (Maven Daemon), `git`, `jj` (jujutsu), and the Claude Code CLI in a single image. The image is meant to be run against an arbitrary host project directory: the host's source tree is bind-mounted at its original host path inside the container (so jj/git worktree metadata resolves), and the host's `~/.m2` is exposed as a read-only lower layer beneath a per-worktree overlayfs upper layer so each worktree gets isolated Maven local-repo writes while still benefiting from the shared host cache.
+A Docker-based dev environment that ships JDK 25 (Temurin), `mvnd` (Maven Daemon), `git`, `jj` (jujutsu), and the Claude Code CLI in a single image. The image is meant to be run against an arbitrary host project directory: the host's source tree is bind-mounted at its original host path inside the container (so jj/git worktree metadata resolves). Extra host paths can be exposed via `--mount` flags or a `~/.maudebox` config; one of them can opt into mode `overlay`, which layers a per-worktree writable upper over a read-only host lower (the typical use case is `~/.m2`, giving each worktree isolated Maven snapshot writes while sharing the host cache as warm starting state).
 
 The repo contains only the container itself: `Dockerfile`, `build.sh`, `maudebox` (the run wrapper), `entrypoint.sh`, `prompt.sh`. There is no application source code here — changes to this repo are changes to the dev-container itself.
 
@@ -31,27 +31,35 @@ There are no tests, no linters, and no CI configured in this repo. To validate a
 
 ## Architecture
 
-### Three-layer Maven cache via overlayfs
+### Opt-in three-layer cache via overlayfs (one or more)
 
-The non-obvious piece is in `entrypoint.sh`. At container start it mounts an `overlay` filesystem at `/root/.m2` with:
+The non-obvious piece is in `entrypoint.sh`. For each mount spec that uses mode `overlay` (e.g. `~/.m2:~/.m2:overlay` in `~/.maudebox` or via `--mount`), the wrapper:
 
-- `lowerdir=/m2-host` — the host's `~/.m2`, bind-mounted read-only by `maudebox`.
-- `upperdir=/m2-upper/upper` — inside a per-worktree named Docker volume, writable.
-- `workdir=/m2-upper/work` — sibling subdir in the same volume.
+- bind-mounts the host source at `/maudebox/overlay-N/lower` read-only,
+- creates a per-worktree+per-target Docker volume (`maudebox-overlay-<basename>-<projhash>-<targethash>`) mounted at `/maudebox/overlay-N/upper`,
+- appends a `lower:upper:target` triple to the `MAUDEBOX_OVERLAYS` env var.
 
-Both upperdir and workdir live under `/m2-upper` (a Docker named volume backed by the host filesystem) rather than on the container's rootfs. This is mandatory: kernel overlayfs refuses to use another overlay as upperdir/workdir, and Docker's container rootfs is itself overlayfs. Putting them in a named volume sidesteps that.
+The entrypoint loops over `MAUDEBOX_OVERLAYS` and mounts an `overlay` filesystem at each container target with:
 
-This means every container sees the host's pre-warmed Maven cache, but writes (downloaded artifacts, locally installed snapshots) go into a volume scoped to that worktree, so concurrent containers for different projects never stomp on each other and the host `~/.m2` is never mutated. Mounting overlayfs from inside a container requires `--cap-add SYS_ADMIN` and `--security-opt apparmor=unconfined`, which `maudebox` supplies. If `/m2-host` is empty or absent, the entrypoint falls back to a plain `~/.m2` rather than failing.
+- `lowerdir=<lower>` — the host source, read-only.
+- `upperdir=<upper>/upper` — inside the per-overlay volume, writable.
+- `workdir=<upper>/work` — sibling subdir in the same volume.
+
+Both upperdir and workdir live inside the per-overlay Docker volume (host-fs backed) rather than on the container's rootfs. This is mandatory: kernel overlayfs refuses to use another overlay as upperdir/workdir, and Docker's container rootfs is itself overlayfs. Putting them in a named volume sidesteps that.
+
+The typical use case is the host's `~/.m2`: every container sees the pre-warmed Maven cache, but writes (downloaded artifacts, locally installed snapshots) go into a volume scoped to that worktree, so concurrent containers for different projects never stomp on each other and the host source is never mutated. Multi-overlay lets you do the same for `~/.cargo`, `~/.gradle`, `~/.npm`, etc. — one overlay per polyglot tool. Mounting overlayfs from inside a container requires `--cap-add SYS_ADMIN` and `--security-opt apparmor=unconfined`, which `maudebox` supplies. If a lowerdir is empty or absent, the entrypoint logs a notice and skips that overlay rather than failing. Without any overlay specs, `MAUDEBOX_OVERLAYS` is unset and the entrypoint's overlay loop is a no-op.
+
+`maudebox list` aggregates by project (one row per `maudebox.project` label across all that project's overlay volumes, with an `OVERLAYS` count column). `--clean` removes every volume labelled with the current project, so all of a project's overlays go in one shot.
 
 ### Container runs as root, then drops privileges on Linux
 
 The container starts as root (UID 0) and stays that way for the privileged setup steps — overlayfs mount needs `CAP_SYS_ADMIN`, and the volume mounts are root-owned at first creation. After that, the entrypoint's behavior diverges by host platform:
 
-- **macOS / OrbStack:** stays root for the entire session. OrbStack root-squashes virtiofs bind-mounts, so files in `/m2-host` and the host project bind-mount appear as `uid=0` inside the container, and writes from the container's root user translate back to the host user transparently. Running as anything other than root would break overlayfs copy-up: lowerdir files appear as `uid=0`, copy-up preserves lowerdir UID, so the upperdir becomes root-owned and a dropped-privilege user can't write to it. We tried this once with `ubuntu`/UID 1000 + `runuser` — mvnd registry, Aether lock files, install-plugin tmp files all broke and each needed its own workaround.
+- **macOS / OrbStack:** stays root for the entire session. OrbStack root-squashes virtiofs bind-mounts, so files in any overlay's lowerdir and the host project bind-mount appear as `uid=0` inside the container, and writes from the container's root user translate back to the host user transparently. Running as anything other than root would break overlayfs copy-up: lowerdir files appear as `uid=0`, copy-up preserves lowerdir UID, so the upperdir becomes root-owned and a dropped-privilege user can't write to it. We tried this once with `ubuntu`/UID 1000 + `runuser` — mvnd registry, Aether lock files, install-plugin tmp files all broke and each needed its own workaround.
 
-- **Linux Docker:** entrypoint drops privileges to the host UID/GID before `exec`'ing the user command. Linux bind mounts pass UIDs through literally — there is no root-squash — so a root-in-container write into the project tree lands as a root-owned file on the host. The wrapper passes `HOST_UID`/`HOST_GID`; the entrypoint rewrites `/etc/passwd` so that UID's home is `/root` (Java's `user.home` reads pw_dir, not `$HOME`), `chown`s the writable trees (`/m2-upper`, `/root/.claude`, `/root/.config/gh`, `/root` itself) using `find -xdev ! -uid $HOST_UID` so it's idempotent and doesn't try to touch read-only bind mounts on a different fs, then `exec setpriv --reuid=… --regid=… --clear-groups -- "$@"`. The OrbStack-specific copy-up problem doesn't occur here because the host's `~/.m2` is already host-uid-owned, so copy-up produces host-uid-owned upperdir files that the dropped-privilege process can write.
+- **Linux Docker:** entrypoint drops privileges to the host UID/GID before `exec`'ing the user command. Linux bind mounts pass UIDs through literally — there is no root-squash — so a root-in-container write into the project tree lands as a root-owned file on the host. The wrapper passes `HOST_UID`/`HOST_GID`; the entrypoint rewrites `/etc/passwd` so that UID's home is `/root` (Java's `user.home` reads pw_dir, not `$HOME`), `chown`s the writable trees (every `/maudebox/overlay-*/upper`, `/root/.claude`, `/root/.config/gh`, `/root` itself) using `find -xdev ! -uid $HOST_UID` so it's idempotent and doesn't try to touch read-only bind mounts on a different fs, then `exec setpriv --reuid=… --regid=… --clear-groups -- "$@"`. The OrbStack-specific copy-up problem doesn't occur here because the host source is already host-uid-owned, so copy-up produces host-uid-owned upperdir files that the dropped-privilege process can write.
 
-Everything still lives at `/root` regardless of platform: the Maven cache mount (`/root/.m2`), the Claude config volume (`/root/.claude`), and a `/root/<basename>` symlink to the worktree's host path. The `ubuntu` user from the noble base may collide with `HOST_UID=1000` on Linux, which is why the entrypoint *replaces* any existing passwd entry for `HOST_UID` rather than appending — otherwise `/home/ubuntu` would win as pw_dir.
+Everything still lives at `/root` regardless of platform: the Claude config volume (`/root/.claude`), an opt-in overlay target (typically `/root/.m2`), and a `/root/<basename>` symlink to the worktree's host path. The `ubuntu` user from the noble base may collide with `HOST_UID=1000` on Linux, which is why the entrypoint *replaces* any existing passwd entry for `HOST_UID` rather than appending — otherwise `/home/ubuntu` would win as pw_dir.
 
 ### jj workspaces / git worktrees
 
@@ -127,5 +135,5 @@ Claude Code is installed as the native binary via `curl … | bash` and moved in
 - Claude Code's installer drops a launcher symlink into `$HOME/.local/bin/claude` whose target lives in `$HOME/.local/share/claude/versions/<ver>`. The Dockerfile resolves the symlink (`readlink -f`) and moves the actual binary into `/usr/local/bin` so it lives outside any volume mount path. Don't replace this with a plain `mv` of the symlink. Keep the `~/.local/bin/claude → /usr/local/bin/claude` symlink — the native binary checks for it at startup and warns if it's missing.
 - **Java's `user.home` ≠ `$HOME`.** Java derives `user.home` from `getpwuid()->pw_dir` in `/etc/passwd`, not from the env var. Other tools (Python's `pathlib.Path.home()`, Go's `os.UserHomeDir()`) do the same. With root running and root's pw_dir naturally being `/root`, this works out — but if you ever switch the runtime user or override `HOME`, expect Maven (and friends) to disagree about where `~` lives. Either keep them aligned or pass `-Duser.home=…` explicitly.
 - The jj release tarball stores members with a `./` prefix, so `tar -x … ./jj` is required (not `… jj`).
-- The overlayfs setup is the load-bearing trick of this image. Don't replace it with a plain bind-mount or a `cp` of `~/.m2` without understanding the isolation guarantees it provides.
+- The overlayfs setup is the load-bearing trick when an `overlay` mount is requested. Don't replace it with a plain bind-mount or a `cp` of the source without understanding the isolation guarantees it provides.
 - **Overlay copy-up preserves lowerdir UIDs.** When the kernel copies a file from lowerdir to upperdir on first write, it preserves the lowerdir file's ownership. On macOS/OrbStack, virtiofs is root-squashed so everything in lowerdir appears as `uid=0` — which is why the container has to stay root there; dropping privileges would leave the upperdir unwritable for the very files mvnd/Aether/Maven plugins need to update. On Linux, lowerdir files are owned by the host user (no squash), so copy-up produces host-uid-owned upperdir files and the dropped-privilege process can write them — that's why the Linux drop-privileges path doesn't trip the same failures. `MVND_DAEMON_STORAGE=~/.mvnd` keeps mvnd state out of the overlay's upperdir to avoid pointless copy-up traffic — small optimization, not load-bearing.
