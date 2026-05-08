@@ -4,12 +4,15 @@ FROM eclipse-temurin:25-jdk-noble
 ARG MVND_VERSION=1.0.5
 ARG JJ_VERSION=0.34.0
 
-# The container runs as root throughout. OrbStack root-squashes virtiofs so
-# every file in the host bind-mounts (project source, ~/.m2) appears as
-# uid=0 inside the container; running anything but root means overlayfs
-# copy-up creates root-owned files that the dropped-privilege user can't
-# write to. With root, $HOME is /root by default and that's where everything
-# lives — claude config, the Maven cache mount, the project bind-mount.
+# The container starts as root for the privileged setup (overlay mount, volume
+# chowns) and on Linux drops to the host UID before exec'ing the user command —
+# Linux bind mounts pass UIDs through literally, so root-in-container writes
+# would otherwise land as root on the host. macOS/OrbStack stays root for the
+# whole session because virtiofs is root-squashed (host user appears as uid=0)
+# and lowerdir-uid-preserving overlay copy-up would leave the ~/.m2 upperdir
+# unwritable for any non-root user. See CLAUDE.md for the full story.
+# Either way $HOME stays /root and that's where everything lives — claude
+# config, the Maven cache mount, the project bind-mount.
 
 # mvnd's daemon registry and logs default to ~/.m2/mvnd. Keep mvnd state
 # out of the overlay so its small writes don't trigger pointless copy-up.
