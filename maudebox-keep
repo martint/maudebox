@@ -1,0 +1,18 @@
+#!/bin/bash
+# maudebox-keep — disarm ephemeral cleanup for the current container.
+#
+# For ephemeral instances launched via `maudebox new …` (without --keep), the
+# host wrapper bind-mounts a per-instance state dir at /run/maudebox/. The
+# trap on the host side checks that dir for a `keep` file when the container
+# exits and skips destruction if it's there. This script just creates that
+# file, so a user who's changed their mind mid-session can preserve the
+# workspace and overlay volume without leaving the container.
+set -euo pipefail
+
+if [ ! -d /run/maudebox ]; then
+    echo "Not an ephemeral instance; nothing to keep." >&2
+    exit 0
+fi
+
+touch /run/maudebox/keep
+echo "Marked '${MAUDEBOX_INSTANCE:-this instance}' to keep — the workspace and overlay volume will survive when the container exits."

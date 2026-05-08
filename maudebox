@@ -29,6 +29,7 @@ usage() {
 Usage: maudebox [--clean] [--tag TAG] [project-dir] [command...]
        maudebox new <name> [project-dir] [--path PATH] [--from REV] [--keep]
        maudebox list
+       maudebox keep <id-or-name>
 
 Launch a maudebox container for a host project directory. The project (and
 its base repo, if it's a jj workspace or git worktree) is bind-mounted at
@@ -63,6 +64,14 @@ Subcommands:
                 overlay volume), showing its container ID if running, its
                 running/stopped status, instance name, ephemeral status, and
                 project path.
+  keep <id-or-name>
+                for a running ephemeral instance, prevent its workspace and
+                Maven overlay from being deleted when the container exits.
+                The argument matches the container ID (as shown in `maudebox
+                list`), the instance basename (the path's last component), or
+                the ephemeral name originally passed to `maudebox new`. From
+                inside the container, run `maudebox-keep` instead — same
+                effect.
 
 Examples:
   maudebox                               # interactive shell in current dir
@@ -75,6 +84,7 @@ Examples:
   maudebox new feature-x --from main     # start from a specific revision
   maudebox new feature-x --keep          # keep workspace/overlay after exit
   maudebox list                          # list registered maudebox instances
+  maudebox keep feature-x                # don't tear down on exit (running instance)
 EOF
 }
 
@@ -87,6 +97,16 @@ compute_volume_name() {
     dir_name="$(basename "$dir")"
     path_hash="$(echo "$dir" | sha256sum | cut -c1-8)"
     echo "maudebox-overlay-${dir_name}-${path_hash}"
+}
+
+# ── per-instance state dir on the host ───────────────────────────────────────
+# Keyed by overlay volume name (i.e. by full project path) so it's stable
+# across runs of the same worktree. For ephemeral runs the wrapper bind-mounts
+# this at /run/maudebox/ so an in-container `maudebox-keep` (or host-side
+# `maudebox keep`) can drop a flag the cleanup trap reads after exit.
+compute_state_dir() {
+    local dir="$1"
+    echo "${XDG_STATE_HOME:-$HOME/.local/state}/maudebox/instances/$(compute_volume_name "$dir")"
 }
 
 # ── `maudebox new` ────────────────────────────────────────────────────────────
@@ -164,6 +184,21 @@ cmd_new() {
 _maudebox_new_cleanup() {
     local rc=$?
     set +e   # best-effort cleanup
+
+    local state_dir
+    state_dir="$(compute_state_dir "$NEW_TARGET")"
+
+    # The user (in-container `maudebox-keep` or host `maudebox keep`) can drop
+    # a `keep` file in the state dir to disarm cleanup mid-session. Honour it
+    # by leaving the workspace and overlay in place — but still drop the now-
+    # stale state dir so a future `maudebox` invocation against this same path
+    # starts fresh (it's no longer ephemeral after this point).
+    if [ -e "$state_dir/keep" ]; then
+        echo "Keep flag set; preserving $NEW_KIND workspace at: $NEW_TARGET"
+        rm -rf "$state_dir"
+        return $rc
+    fi
+
     echo "Cleaning up ephemeral $NEW_KIND workspace at: $NEW_TARGET"
     case "$NEW_KIND" in
         jj)
@@ -178,6 +213,7 @@ _maudebox_new_cleanup() {
     local volume
     volume="$(compute_volume_name "$NEW_TARGET")"
     docker volume rm "$volume" >/dev/null 2>&1
+    rm -rf "$state_dir"
     return $rc
 }
 
@@ -187,6 +223,9 @@ _maudebox_new_cleanup() {
 # keys, and emit one row per unique project — preferring volume labels for
 # metadata (durable, present even when stopped) and falling back to
 # container labels when no volume exists yet.
+#
+# An ephemeral instance whose keep flag is set is shown as non-ephemeral,
+# since at that point it'll persist after the container exits.
 #
 # Tabs round-trip through \037 (Unit Separator) before `read` because bash
 # treats IFS=$'\t' as whitespace and collapses runs of it — which would lose
@@ -207,7 +246,7 @@ cmd_list() {
 
     {
         printf 'ID\tSTATUS\tINSTANCE\tEPHEMERAL\tPATH\n'
-        local project vol_sample run_sample _proj instance ephemeral id status
+        local project vol_sample run_sample _proj instance ephemeral id status state_dir
         while IFS= read -r project; do
             [ -z "$project" ] && continue
             instance=""; ephemeral=""; id=""
@@ -236,9 +275,61 @@ cmd_list() {
                 status="stopped"
             fi
 
+            # Surface ephemeral-with-keep-set as non-ephemeral, since at that
+            # point the workspace will outlive the container.
+            if [ "$ephemeral" = "true" ]; then
+                state_dir="$(compute_state_dir "$project")"
+                [ -e "$state_dir/keep" ] && ephemeral="false"
+            fi
+
             printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$status" "${instance:-?}" "${ephemeral:--}" "$project"
         done <<< "$projects"
     } | column -t -s $'\t'
+}
+
+# ── `maudebox keep <id-or-name>` ─────────────────────────────────────────────
+# Find a running ephemeral container by container ID, instance basename, or
+# the original `maudebox new <name>` name, then drop the `keep` flag in its
+# state dir. A no-op for non-ephemeral instances.
+cmd_keep() {
+    local target="${1:-}"
+    [ -n "$target" ] || { echo "maudebox keep: <id-or-name> required" >&2; exit 1; }
+
+    local fmt='{{.ID}}\t{{.Label "maudebox.instance"}}\t{{.Label "maudebox.ephemeral-name"}}\t{{.Label "maudebox.ephemeral"}}\t{{.Label "maudebox.state-dir"}}\t{{.Label "maudebox.project"}}'
+    local matches
+    matches="$(docker ps --filter label=maudebox.instance --format "$fmt" \
+        | awk -F'\t' -v t="$target" '$1==t || $2==t || $3==t')"
+
+    local count
+    count="$(printf '%s' "$matches" | grep -c . || true)"
+    if [ "$count" -eq 0 ]; then
+        echo "No running maudebox container matches '$target'." >&2
+        exit 1
+    elif [ "$count" -gt 1 ]; then
+        echo "Multiple running maudebox containers match '$target':" >&2
+        printf '%s\n' "$matches" | awk -F'\t' '{printf "  %s  %s  (%s)\n", $1, $2, $6}' >&2
+        exit 1
+    fi
+
+    local id instance ename ephemeral state_dir _project
+    # See the cmd_list comment: IFS=$'\t' collapses empty middle fields (e.g.
+    # an unset ephemeral-name on a non-ephemeral container would shift the
+    # rest one position left). Use \037 so each delimiter stays distinct.
+    IFS=$'\037' read -r id instance ename ephemeral state_dir _project \
+        <<<"$(printf '%s' "$matches" | tr '\t' '\037')"
+
+    if [ "$ephemeral" != "true" ]; then
+        echo "Instance '$instance' is not ephemeral; nothing to keep."
+        exit 0
+    fi
+    if [ -z "$state_dir" ]; then
+        echo "Instance '$instance' was launched by an older version of maudebox that doesn't support 'keep'; restart the container to enable it." >&2
+        exit 1
+    fi
+
+    mkdir -p "$state_dir"
+    touch "$state_dir/keep"
+    echo "Marked '$instance' to keep — workspace and overlay volume will survive when the container exits."
 }
 
 # ── parse flags ───────────────────────────────────────────────────────────────
@@ -260,6 +351,7 @@ done
 case "${1:-}" in
     new)  shift; cmd_new "$@" ;;
     list) shift; cmd_list "$@"; exit ;;
+    keep) shift; cmd_keep "$@"; exit ;;
 esac
 
 PROJECT_DIR="$(realpath "${1:-.}")"
@@ -396,17 +488,25 @@ VCS_CONFIG_MOUNTS=()
 # (Pre-existing volumes from before this change won't have labels — they show
 # in the list with derived basename and empty path; a `--clean` + re-run
 # re-creates them with labels.) EPHEMERAL_NAME is set only when cmd_new
-# spawned us recursively.
+# spawned us recursively; in that case we also set up a per-instance state
+# dir on the host and bind-mount it at /run/maudebox/ so `maudebox-keep`
+# (in-container) and `maudebox keep` (host) can drop the keep flag the
+# cleanup trap reads after exit.
 INSTANCE_NAME="$(basename "$PROJECT_DIR")"
 LABELS=(
     --label "maudebox.instance=$INSTANCE_NAME"
     --label "maudebox.project=$PROJECT_DIR"
 )
+EPHEMERAL_MOUNT=()
 if [ -n "$EPHEMERAL_NAME" ]; then
+    STATE_DIR="$(compute_state_dir "$PROJECT_DIR")"
+    mkdir -p "$STATE_DIR"
     LABELS+=(
         --label "maudebox.ephemeral=true"
         --label "maudebox.ephemeral-name=$EPHEMERAL_NAME"
+        --label "maudebox.state-dir=$STATE_DIR"
     )
+    EPHEMERAL_MOUNT=( -v "$STATE_DIR:/run/maudebox" )
 else
     LABELS+=( --label "maudebox.ephemeral=false" )
 fi
@@ -448,6 +548,7 @@ docker run --rm -it \
     "${LABELS[@]}" \
     -v "$HOME/.m2:/m2-host:ro" \
     -v "${UPPER_VOLUME}:/m2-upper" \
+    "${EPHEMERAL_MOUNT[@]}" \
     "${PROJECT_MOUNTS[@]}" \
     "${CLAUDE_MOUNTS[@]}" \
     "${VCS_CONFIG_MOUNTS[@]}" \

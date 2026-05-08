@@ -141,6 +141,12 @@ COPY --chmod=0644 prompt.sh /etc/profile.d/dev-prompt.sh
 RUN echo '. /etc/profile.d/dev-prompt.sh' >> /etc/bash.bashrc \
  && echo '. /etc/profile.d/dev-prompt.sh' >> /root/.bashrc
 
+# ── in-container helper for `maudebox keep` ───────────────────────────────────
+# Lets the user preserve an ephemeral workspace from inside the container by
+# touching a flag file in the per-instance state dir bind-mounted by the host
+# wrapper. Inert outside ephemeral runs (the dir isn't mounted).
+COPY --chmod=0755 maudebox-keep /usr/local/bin/maudebox-keep
+
 # ── entrypoint ────────────────────────────────────────────────────────────────
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 

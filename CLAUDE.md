@@ -100,6 +100,14 @@ One narrow carve-out under `projects/`: Claude Code's auto-memory directory `~/.
 
 `~/.claude.json` (login token + project list) lives outside `~/.claude/` on the host, so it can't be picked up by the volume mount. The entrypoint instead symlinks `~/.claude.json → ~/.claude/state.json` so writes follow into the persistent volume. The user must log into Claude Code once inside any container; subsequent containers share that login. Same applies to `gh auth login`.
 
+### Container labels and the `keep` flag for ephemeral instances
+
+Every container is stamped with `maudebox.*` labels at run time so the wrapper can find its own containers without parsing image names: `maudebox.instance` (project basename), `maudebox.project` (host path), `maudebox.ephemeral=true|false`. For ephemeral runs (`maudebox new …` without `--keep`), two more labels are set: `maudebox.ephemeral-name` (the user-supplied name) and `maudebox.state-dir` (host path of the per-instance state dir).
+
+The state dir lives at `${XDG_STATE_HOME:-~/.local/state}/maudebox/instances/<volume-name>/` (keyed off the same volume name as the overlay), is created by the wrapper before `docker run`, and is bind-mounted at `/run/maudebox/` inside the container. The in-container `maudebox-keep` script (and the host-side `maudebox keep <name>`) just `touch` a `keep` file there. The `_maudebox_new_cleanup` trap reads `<state-dir>/keep` after the container exits and skips destruction when present. The state dir is removed on cleanup either way, so a kept workspace's next `maudebox` run is a normal (non-ephemeral) one.
+
+The `--ephemeral-name <name>` flag on the inner wrapper invocation is internal — `cmd_new` passes it on its recursive call so the inner run knows it's ephemeral and labels itself accordingly. It's intentionally not in `--help`. Don't expose it as a public flag; the right way to spawn ephemerals is `maudebox new`.
+
 ### Per-worktree volume naming
 
 `maudebox` derives the upper-layer volume name as `maudebox-overlay-<basename>-<sha256-prefix-of-fullpath>`. The basename keeps it human-readable; the hash prevents collisions when two worktrees share a basename. `--clean` removes only that one volume.

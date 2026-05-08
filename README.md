@@ -62,6 +62,7 @@ maudebox . claude                 # launch Claude Code
 maudebox --clean /path/to/project # delete this worktree's Maven overlay volume
 maudebox --tag my-tag . bash      # use a non-default image tag
 maudebox list                     # list registered maudebox instances
+maudebox keep feature-x           # don't tear down on exit (running ephemeral)
 ```
 
 Run `maudebox --help` for the full option list.
@@ -97,6 +98,15 @@ Cleanup runs through an `EXIT` trap, so it fires on normal exit, errors, and Ctr
 - **Overlay volume:** the per-worktree `maudebox-overlay-…` volume is removed.
 
 Uncommitted working-copy changes are **not** preserved by ephemeral cleanup. Pass `--keep` if you might want to come back to the workspace, or commit before exiting the container.
+
+#### Changing your mind mid-session
+
+If you've launched an ephemeral instance without `--keep` and later decide you'd rather hold onto it, you can keep it without leaving the running container:
+
+- **From inside the container:** run `maudebox-keep`.
+- **From the host:** run `maudebox keep <id-or-name>`, where the argument is the container ID (as shown by `maudebox list`), the instance basename, or the original name passed to `maudebox new`.
+
+Either way, when the container exits its workspace and Maven overlay are left in place instead of being deleted. Both are no-ops for non-ephemeral instances. After the container exits, a kept workspace is just a regular jj workspace / git worktree — running `maudebox` on it again is no longer ephemeral.
 
 ## How it works
 
