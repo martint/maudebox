@@ -23,6 +23,14 @@ IMAGE_NAME="maudebox"
 CLEAN=false
 MEMORY_FROM=""
 EPHEMERAL_NAME=""
+EXTRA_MOUNTS=()
+CONTAINER_HOME="/root"   # fixed by the entrypoint; ~ on the container side
+                         # of a --mount/config spec expands to this
+
+# XDG Base Directory: config under $XDG_CONFIG_HOME (default ~/.config),
+# state already lives under $XDG_STATE_HOME (default ~/.local/state) via
+# compute_state_dir below.
+MAUDEBOX_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/maudebox/config.toml"
 
 usage() {
     cat <<'EOF'
@@ -42,6 +50,16 @@ Options:
   --tag TAG            image tag to run (default: maudebox)
   --memory-from PATH   share Claude's auto-memory dir with another project
                        (host source keyed to PATH, container target unchanged)
+  --mount SPEC         add an extra bind mount, where SPEC is
+                         HOST_PATH:CONTAINER_PATH[:ro|rw]
+                       Leading `~` on the host side expands to $HOME, on the
+                       container side to /root. Mode defaults to rw. Repeat
+                       for multiple mounts. Mounts can also be declared in
+                       $XDG_CONFIG_HOME/maudebox/config.toml (TOML):
+                         mounts = [
+                             "~/.aws:~/.aws:ro",
+                             "~/Documents/notes:~/notes",
+                         ]
   -h, --help           show this help and exit
 
 Arguments:
@@ -87,6 +105,7 @@ Examples:
   maudebox new feature-x --ephemeral     # tear down workspace/overlay on exit
   maudebox list                          # list registered maudebox instances
   maudebox keep feature-x                # don't tear down on exit (running instance)
+  maudebox --mount ~/.aws:~/.aws:ro      # bind ~/.aws read-only into the container
 EOF
 }
 
@@ -109,6 +128,59 @@ compute_volume_name() {
 compute_state_dir() {
     local dir="$1"
     echo "${XDG_STATE_HOME:-$HOME/.local/state}/maudebox/instances/$(compute_volume_name "$dir")"
+}
+
+# ── config-file mount parsing ────────────────────────────────────────────────
+# Parses a `mounts = [ "...", ... ]` array out of a TOML config and emits one
+# spec per line on stdout. Supports the limited subset we actually use:
+# double-quoted strings inside the array, comments via `#`, the array spread
+# across one line or many. Strings with embedded `]` or `#` are not handled.
+parse_toml_mounts() {
+    local cfg="$1"
+    [ -e "$cfg" ] || return 0
+    local in_array=false
+    local rest line
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -z "$line" ] && continue
+
+        if ! $in_array; then
+            if [[ "$line" =~ ^mounts[[:space:]]*=[[:space:]]*\[(.*)$ ]]; then
+                in_array=true
+                rest="${BASH_REMATCH[1]}"
+            else
+                continue
+            fi
+        else
+            rest="$line"
+        fi
+
+        if [[ "$rest" == *"]"* ]]; then
+            rest="${rest%%]*}"
+            in_array=false
+        fi
+        while [[ "$rest" =~ \"([^\"]*)\" ]]; do
+            printf '%s\n' "${BASH_REMATCH[1]}"
+            rest="${rest#*\"${BASH_REMATCH[1]}\"}"
+        done
+    done < "$cfg"
+}
+
+# Convert a HOST:CONTAINER[:MODE] spec to a `-v <expanded-host>:<expanded-
+# container>:<mode>` pair, expanding leading `~` on the host side to $HOME
+# and on the container side to $CONTAINER_HOME. Mode defaults to rw. Output
+# goes into the array named in the first arg (bash 3.2-compatible — no
+# nameref, just eval-style append).
+build_mount_arg() {
+    local out_array="$1" spec="$2"
+    local src dst mode
+    IFS=':' read -r src dst mode <<<"$spec"
+    : "${mode:=rw}"
+    [[ "$src" == "~"* ]] && src="$HOME${src:1}"
+    [[ "$dst" == "~"* ]] && dst="${CONTAINER_HOME}${dst:1}"
+    eval "${out_array}+=( -v \"\$src:\$dst:\$mode\" )"
 }
 
 # ── `maudebox new` ────────────────────────────────────────────────────────────
@@ -176,6 +248,13 @@ cmd_new() {
     fi
 
     local inner_args=( --tag "$IMAGE_NAME" --memory-from "$NEW_SOURCE" )
+    # Forward --mount specs collected on the outer command line. The inner
+    # invocation re-reads the user config itself, so config-file mounts
+    # aren't forwarded here (would otherwise duplicate).
+    local spec
+    for spec in "${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"}"; do
+        inner_args+=( --mount "$spec" )
+    done
     if $NEW_EPHEMERAL; then
         # Pass --ephemeral-name only on actually-ephemeral runs so the inner
         # invocation labels the container as such and bind-mounts the state
@@ -348,10 +427,11 @@ cmd_keep() {
 while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
     case "$1" in
         -h|--help)        usage; exit 0 ;;
-        --clean)          CLEAN=true;            shift ;;
-        --tag)            IMAGE_NAME="$2";       shift 2 ;;
-        --memory-from)    MEMORY_FROM="$2";      shift 2 ;;
-        --ephemeral-name) EPHEMERAL_NAME="$2";   shift 2 ;;
+        --clean)          CLEAN=true;             shift ;;
+        --tag)            IMAGE_NAME="$2";        shift 2 ;;
+        --memory-from)    MEMORY_FROM="$2";       shift 2 ;;
+        --mount)          EXTRA_MOUNTS+=( "$2" ); shift 2 ;;
+        --ephemeral-name) EPHEMERAL_NAME="$2";    shift 2 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
@@ -490,6 +570,18 @@ VCS_CONFIG_MOUNTS=()
 [ -d "$HOME/.config/git" ]              && VCS_CONFIG_MOUNTS+=( -v "$HOME/.config/git:/root/.config/git:ro" )
 [ -e "$HOME/.config/jj/config.toml" ]   && VCS_CONFIG_MOUNTS+=( -v "$HOME/.config/jj/config.toml:/root/.config/jj/config.toml:ro" )
 
+# ── extra user-defined mounts (--mount and config) ───────────────────────────
+# CLI mounts already collected in EXTRA_MOUNTS. Merge in config-file mounts
+# (this side reads the config rather than cmd_new so the recursive `maudebox
+# new` invocation doesn't double-apply the file when forwarding CLI specs).
+while IFS= read -r _spec; do
+    [ -n "$_spec" ] && EXTRA_MOUNTS+=( "$_spec" )
+done < <(parse_toml_mounts "$MAUDEBOX_CONFIG")
+EXTRA_MOUNT_ARGS=()
+for _spec in "${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"}"; do
+    build_mount_arg EXTRA_MOUNT_ARGS "$_spec"
+done
+
 # ── run ───────────────────────────────────────────────────────────────────────
 # The same maudebox.* labels go on both the overlay volume and the container.
 # Volumes outlive containers, so labelling the volume is what lets `maudebox
@@ -565,5 +657,6 @@ docker run --rm -it \
     "${PROJECT_MOUNTS[@]}" \
     "${CLAUDE_MOUNTS[@]}" \
     "${VCS_CONFIG_MOUNTS[@]}" \
+    "${EXTRA_MOUNT_ARGS[@]+"${EXTRA_MOUNT_ARGS[@]}"}" \
     "$IMAGE_NAME" \
     "$@"

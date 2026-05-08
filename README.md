@@ -73,6 +73,29 @@ The same basename is also exposed as `$MAUDEBOX_INSTANCE`, which is convenient a
 
 If the project is a **jj workspace** or **git worktree**, `maudebox` reads its metadata (`.jj/repo` for jj, `.git` for git), finds the base repo, and bind-mounts it at its host path too — so the absolute paths recorded inside the worktree resolve correctly and `jj` / `git` commands Just Work.
 
+### Extra bind mounts
+
+Beyond the project tree, the `~/.m2` overlay, and the Claude/gh state volumes, you can declare additional host paths to expose into the container — `~/.aws`, a notes directory, a shared cache, anything you'd otherwise have to add via raw `docker run -v`.
+
+Two equivalent ways:
+
+- **Command line:** `--mount HOST:CONTAINER[:ro|rw]`, repeatable.
+
+  ```sh
+  maudebox --mount ~/.aws:~/.aws:ro --mount ~/Documents/notes:~/notes
+  ```
+
+- **`$XDG_CONFIG_HOME/maudebox/config.toml`** (TOML; defaults to `~/.config/maudebox/config.toml`) — applies to every invocation:
+
+  ```toml
+  mounts = [
+      "~/.aws:~/.aws:ro",
+      "~/Documents/notes:~/notes",
+  ]
+  ```
+
+In both cases the spec syntax is `HOST:CONTAINER[:ro|rw]`. A leading `~` on the host side expands to `$HOME` (your host home); on the container side it expands to `/root` (the container's home, fixed by the entrypoint). Mode defaults to `rw`. CLI mounts are forwarded to the inner instance when used with `maudebox new`.
+
 ### Spawning a new workspace or worktree
 
 `maudebox new <name>` creates a fresh jj workspace or git worktree off an existing project and launches `maudebox` on it. By default the workspace persists after the container exits, just like running `maudebox <path>` would — `new` is essentially `mkdir-and-enter`. Pass `--ephemeral` for short-lived scratch workspaces that should be torn down on exit.
