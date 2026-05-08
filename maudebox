@@ -22,11 +22,13 @@ set -euo pipefail
 IMAGE_NAME="maudebox"
 CLEAN=false
 MEMORY_FROM=""
+EPHEMERAL_NAME=""
 
 usage() {
     cat <<'EOF'
 Usage: maudebox [--clean] [--tag TAG] [project-dir] [command...]
        maudebox new <name> [project-dir] [--path PATH] [--from REV] [--keep]
+       maudebox list
 
 Launch a maudebox container for a host project directory. The project (and
 its base repo, if it's a jj workspace or git worktree) is bind-mounted at
@@ -57,6 +59,10 @@ Subcommands:
                                 (default: jj @-, git HEAD)
                   --keep        preserve the workspace/worktree and overlay
                                 volume after the container exits
+  list          list every registered maudebox instance (anything with an
+                overlay volume), showing its container ID if running, its
+                running/stopped status, instance name, ephemeral status, and
+                project path.
 
 Examples:
   maudebox                               # interactive shell in current dir
@@ -68,6 +74,7 @@ Examples:
   maudebox new feature-x /path/to/proj   # ephemeral workspace from a project
   maudebox new feature-x --from main     # start from a specific revision
   maudebox new feature-x --keep          # keep workspace/overlay after exit
+  maudebox list                          # list registered maudebox instances
 EOF
 }
 
@@ -150,7 +157,7 @@ cmd_new() {
     fi
 
     local rc=0
-    "$0" --tag "$IMAGE_NAME" --memory-from "$NEW_SOURCE" "$NEW_TARGET" || rc=$?
+    "$0" --tag "$IMAGE_NAME" --memory-from "$NEW_SOURCE" --ephemeral-name "$NEW_NAME" "$NEW_TARGET" || rc=$?
     exit $rc
 }
 
@@ -174,22 +181,86 @@ _maudebox_new_cleanup() {
     return $rc
 }
 
+# ── `maudebox list` ──────────────────────────────────────────────────────────
+# An "instance" is a project: anything currently running OR with at least
+# one overlay volume on disk shows up. We collect both, union the project
+# keys, and emit one row per unique project — preferring volume labels for
+# metadata (durable, present even when stopped) and falling back to
+# container labels when no volume exists yet.
+#
+# Tabs round-trip through \037 (Unit Separator) before `read` because bash
+# treats IFS=$'\t' as whitespace and collapses runs of it — which would lose
+# empty middle fields like an unset label.
+cmd_list() {
+    local vol_fmt='{{.Label "maudebox.project"}}\t{{.Label "maudebox.instance"}}\t{{.Label "maudebox.ephemeral"}}'
+    local ps_fmt='{{.Label "maudebox.project"}}\t{{.ID}}\t{{.Label "maudebox.instance"}}\t{{.Label "maudebox.ephemeral"}}'
+    local running volumes
+    running="$(docker ps --filter label=maudebox.instance --format "$ps_fmt" | tr '\t' '\037')"
+    volumes="$(docker volume ls --filter name=maudebox-overlay- --format "$vol_fmt" | tr '\t' '\037')"
+
+    # Union of project keys from both sources, deduped.
+    local projects
+    projects="$( {
+        printf '%s\n' "$volumes"
+        printf '%s\n' "$running"
+    } | awk -F'\037' '$1 != "" {print $1}' | sort -u )"
+
+    {
+        printf 'ID\tSTATUS\tINSTANCE\tEPHEMERAL\tPATH\n'
+        local project vol_sample run_sample _proj instance ephemeral id status
+        while IFS= read -r project; do
+            [ -z "$project" ] && continue
+            instance=""; ephemeral=""; id=""
+
+            # Volume labels are authoritative when available — they survive
+            # container exit, so a stopped instance still has full metadata.
+            vol_sample="$(printf '%s\n' "$volumes" | awk -F'\037' -v p="$project" '$1==p {print; exit}')"
+            if [ -n "$vol_sample" ]; then
+                IFS=$'\037' read -r _proj instance ephemeral <<<"$vol_sample"
+            fi
+
+            # Container labels fill in when there's no volume (running
+            # instance with no overlay) and supply the running container ID.
+            run_sample="$(printf '%s\n' "$running" | awk -F'\037' -v p="$project" '$1==p {print; exit}')"
+            if [ -n "$run_sample" ]; then
+                local _r_proj r_instance r_ephemeral
+                IFS=$'\037' read -r _r_proj id r_instance r_ephemeral <<<"$run_sample"
+                : "${instance:=$r_instance}"
+                : "${ephemeral:=$r_ephemeral}"
+            fi
+
+            if [ -n "$id" ]; then
+                status="running"
+            else
+                id="-"
+                status="stopped"
+            fi
+
+            printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$status" "${instance:-?}" "${ephemeral:--}" "$project"
+        done <<< "$projects"
+    } | column -t -s $'\t'
+}
+
 # ── parse flags ───────────────────────────────────────────────────────────────
+# --ephemeral-name is internal: cmd_new passes it on the recursive invocation
+# so the inner run can label its container as ephemeral. Intentionally not
+# advertised in --help.
 while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
     case "$1" in
-        -h|--help)     usage; exit 0 ;;
-        --clean)       CLEAN=true;        shift ;;
-        --tag)         IMAGE_NAME="$2";   shift 2 ;;
-        --memory-from) MEMORY_FROM="$2";  shift 2 ;;
+        -h|--help)        usage; exit 0 ;;
+        --clean)          CLEAN=true;            shift ;;
+        --tag)            IMAGE_NAME="$2";       shift 2 ;;
+        --memory-from)    MEMORY_FROM="$2";      shift 2 ;;
+        --ephemeral-name) EPHEMERAL_NAME="$2";   shift 2 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
 
 # ── subcommand dispatch ───────────────────────────────────────────────────────
-if [[ "${1:-}" == "new" ]]; then
-    shift
-    cmd_new "$@"
-fi
+case "${1:-}" in
+    new)  shift; cmd_new "$@" ;;
+    list) shift; cmd_list "$@"; exit ;;
+esac
 
 PROJECT_DIR="$(realpath "${1:-.}")"
 shift || true   # remaining args become the container command (default: bash)
@@ -319,7 +390,28 @@ VCS_CONFIG_MOUNTS=()
 [ -e "$HOME/.config/jj/config.toml" ]   && VCS_CONFIG_MOUNTS+=( -v "$HOME/.config/jj/config.toml:/root/.config/jj/config.toml:ro" )
 
 # ── run ───────────────────────────────────────────────────────────────────────
-docker volume create "$UPPER_VOLUME" > /dev/null
+# The same maudebox.* labels go on both the overlay volume and the container.
+# Volumes outlive containers, so labelling the volume is what lets `maudebox
+# list` recover the project path and ephemeral status for stopped instances.
+# (Pre-existing volumes from before this change won't have labels — they show
+# in the list with derived basename and empty path; a `--clean` + re-run
+# re-creates them with labels.) EPHEMERAL_NAME is set only when cmd_new
+# spawned us recursively.
+INSTANCE_NAME="$(basename "$PROJECT_DIR")"
+LABELS=(
+    --label "maudebox.instance=$INSTANCE_NAME"
+    --label "maudebox.project=$PROJECT_DIR"
+)
+if [ -n "$EPHEMERAL_NAME" ]; then
+    LABELS+=(
+        --label "maudebox.ephemeral=true"
+        --label "maudebox.ephemeral-name=$EPHEMERAL_NAME"
+    )
+else
+    LABELS+=( --label "maudebox.ephemeral=false" )
+fi
+
+docker volume create "${LABELS[@]}" "$UPPER_VOLUME" > /dev/null
 
 # Mount the project (and its base repo, if it's a jj/git worktree) at their
 # host paths inside the container so absolute path references in the worktree
@@ -351,8 +443,9 @@ docker run --rm -it \
     --cap-add SYS_ADMIN \
     --security-opt apparmor=unconfined \
     -e "HOST_PROJECT_DIR=$PROJECT_DIR" \
-    -e "MAUDEBOX_INSTANCE=$(basename "$PROJECT_DIR")" \
+    -e "MAUDEBOX_INSTANCE=$INSTANCE_NAME" \
     "${USER_ENV[@]}" \
+    "${LABELS[@]}" \
     -v "$HOME/.m2:/m2-host:ro" \
     -v "${UPPER_VOLUME}:/m2-upper" \
     "${PROJECT_MOUNTS[@]}" \

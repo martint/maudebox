@@ -61,6 +61,7 @@ maudebox . mvnd verify            # one-shot Maven build
 maudebox . claude                 # launch Claude Code
 maudebox --clean /path/to/project # delete this worktree's Maven overlay volume
 maudebox --tag my-tag . bash      # use a non-default image tag
+maudebox list                     # list registered maudebox instances
 ```
 
 Run `maudebox --help` for the full option list.
