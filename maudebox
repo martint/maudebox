@@ -539,16 +539,20 @@ echo "Worktree : $PROJECT_DIR"
 [ -n "$VCS_BASE" ] && [ "$VCS_BASE" != "$PROJECT_DIR" ] && echo "VCS base : $VCS_BASE"
 echo "Volume   : $UPPER_VOLUME"
 
+# `"${arr[@]+"${arr[@]}"}"` is the bash-3.2-safe form for expanding a possibly-
+# empty array under `set -u` — plain `"${arr[@]}"` errors on macOS bash 3.2
+# when the array is empty. USER_ENV is empty on macOS; EPHEMERAL_MOUNT is
+# empty for any non-ephemeral run.
 docker run --rm -it \
     --cap-add SYS_ADMIN \
     --security-opt apparmor=unconfined \
     -e "HOST_PROJECT_DIR=$PROJECT_DIR" \
     -e "MAUDEBOX_INSTANCE=$INSTANCE_NAME" \
-    "${USER_ENV[@]}" \
+    "${USER_ENV[@]+"${USER_ENV[@]}"}" \
     "${LABELS[@]}" \
     -v "$HOME/.m2:/m2-host:ro" \
     -v "${UPPER_VOLUME}:/m2-upper" \
-    "${EPHEMERAL_MOUNT[@]}" \
+    "${EPHEMERAL_MOUNT[@]+"${EPHEMERAL_MOUNT[@]}"}" \
     "${PROJECT_MOUNTS[@]}" \
     "${CLAUDE_MOUNTS[@]}" \
     "${VCS_CONFIG_MOUNTS[@]}" \
