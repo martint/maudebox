@@ -41,6 +41,7 @@ Usage: maudebox [--clean] [--tag TAG] [project-dir] [command...]
        maudebox list
        maudebox keep <id-or-name>
        maudebox mount {add SPEC | list | rm SPEC}
+       maudebox alias {add NAME VALUE | list | rm NAME}
 
 Launch a maudebox container for a host project directory. The project (and
 its base repo, if it's a jj workspace or git worktree) is bind-mounted at
@@ -106,6 +107,15 @@ Subcommands:
   mount list    print all mount specs currently configured in the user config.
   mount rm SPEC
                 remove a previously-added mount spec from the user config.
+  alias add NAME VALUE
+                define a bash alias inside the container by adding it to
+                the [aliases] table in the user config. VALUE can reference
+                container env vars like $MAUDEBOX_INSTANCE — they expand
+                when the alias is invoked, not when defined. Quote VALUE
+                on the shell to keep arguments together.
+  alias list    print all aliases currently configured in the user config.
+  alias rm NAME
+                remove a previously-added alias from the user config.
 
 Examples:
   maudebox                               # interactive shell in current dir
@@ -123,6 +133,7 @@ Examples:
   maudebox mount add ~/.m2:~/.m2:overlay # persist a mount in the user config
   maudebox mount list                    # show configured mounts
   maudebox mount rm ~/.m2:~/.m2:overlay  # remove a configured mount
+  maudebox alias add cl 'claude --dangerously-skip-permissions --remote-control $MAUDEBOX_INSTANCE'
 EOF
 }
 
@@ -193,6 +204,40 @@ parse_toml_mounts() {
             printf '%s\n' "${BASH_REMATCH[1]}"
             rest="${rest#*\"${BASH_REMATCH[1]}\"}"
         done
+    done < "$cfg"
+}
+
+# Parses the `[aliases]` table out of a TOML config and emits one
+# `name<TAB>value` line per entry on stdout. Same limited subset as the
+# mounts parser — bare keys, double-quoted values, comments via `#`. The
+# section ends at the next `[...]` header or EOF. Embedded `\"` and `\\`
+# in TOML values are unescaped.
+parse_toml_aliases() {
+    local cfg="$1"
+    [ -e "$cfg" ] || return 0
+    local in_section=false line
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -z "$line" ] && continue
+
+        if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
+            if [ "${BASH_REMATCH[1]}" = "aliases" ]; then
+                in_section=true
+            else
+                in_section=false
+            fi
+            continue
+        fi
+
+        if $in_section && [[ "$line" =~ ^([a-zA-Z_][a-zA-Z0-9_-]*)[[:space:]]*=[[:space:]]*\"(.*)\"$ ]]; then
+            local name="${BASH_REMATCH[1]}"
+            local value="${BASH_REMATCH[2]}"
+            value="${value//\\\"/\"}"
+            value="${value//\\\\/\\}"
+            printf '%s\t%s\n' "$name" "$value"
+        fi
     done < "$cfg"
 }
 
@@ -562,6 +607,151 @@ cmd_mount() {
     esac
 }
 
+# ── `maudebox alias {add|list|rm}` ───────────────────────────────────────────
+# Manage the `[aliases]` table in the user config. Same idea as cmd_mount: the
+# wrapper rewrites just this section of the file on mutation, leaving
+# everything else (other tables, comments outside the section) intact. The
+# in-container /etc/profile.d/maudebox-aliases.sh script reads the table
+# from the MAUDEBOX_ALIASES env var (assembled by the main flow below) and
+# turns each entry into a bash alias at shell startup.
+
+# Emit the `[aliases]` table to stdout from the caller's `names`/`values`
+# arrays. TOML strings are double-quoted with `\` and `"` escaped; bare
+# keys (alphanumerics + `_`/`-`) are emitted as-is. Empty table emits just
+# the section header so the structure persists across mutations.
+emit_aliases_block() {
+    echo "[aliases]"
+    local i v
+    for ((i=0; i<${#names[@]}; i++)); do
+        v="${values[$i]//\\/\\\\}"
+        v="${v//\"/\\\"}"
+        printf '%s = "%s"\n' "${names[$i]}" "$v"
+    done
+}
+
+# Replace the `[aliases]` table in the user config with the contents of the
+# caller's `names`/`values` arrays. Section is delimited by the `[aliases]`
+# header on one side and the next `[section]` header (or EOF) on the
+# other. Lines elsewhere in the file pass through unchanged.
+write_aliases_config() {
+    local tmp="${MAUDEBOX_CONFIG}.tmp.$$"
+    mkdir -p "$(dirname "$MAUDEBOX_CONFIG")"
+
+    if [ ! -e "$MAUDEBOX_CONFIG" ]; then
+        emit_aliases_block > "$tmp"
+        mv "$tmp" "$MAUDEBOX_CONFIG"
+        return
+    fi
+
+    local line in_section=false replaced=false
+    {
+        while IFS= read -r line || [ -n "$line" ]; do
+            if ! $in_section && [[ "$line" =~ ^[[:space:]]*\[aliases\][[:space:]]*$ ]]; then
+                emit_aliases_block
+                replaced=true
+                in_section=true
+                continue
+            fi
+            if $in_section; then
+                # Stay in the [aliases] section until the next section
+                # header (which we then need to print as it belongs to the
+                # surrounding content, not to us).
+                if [[ "$line" =~ ^[[:space:]]*\[ ]]; then
+                    in_section=false
+                    printf '%s\n' "$line"
+                fi
+                continue
+            fi
+            printf '%s\n' "$line"
+        done < "$MAUDEBOX_CONFIG"
+        if ! $replaced; then
+            emit_aliases_block
+        fi
+    } > "$tmp"
+    mv "$tmp" "$MAUDEBOX_CONFIG"
+}
+
+cmd_alias() {
+    local action="${1:-}"
+    [ -n "$action" ] || { echo "maudebox alias: action required (add|list|rm)" >&2; exit 1; }
+    shift
+
+    # Load current entries into parallel arrays.
+    local -a names=() values=()
+    local _name _value
+    while IFS=$'\t' read -r _name _value; do
+        [ -n "$_name" ] || continue
+        names+=( "$_name" )
+        values+=( "$_value" )
+    done < <(parse_toml_aliases "$MAUDEBOX_CONFIG")
+
+    case "$action" in
+        list)
+            local i
+            for ((i=0; i<${#names[@]}; i++)); do
+                printf '%s = %s\n' "${names[$i]}" "${values[$i]}"
+            done
+            ;;
+        add)
+            local name="${1:-}" value="${2:-}"
+            if [ -z "$name" ] || [ $# -lt 2 ]; then
+                echo "maudebox alias add: NAME VALUE required" >&2; exit 1
+            fi
+            if ! [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]; then
+                echo "maudebox alias add: invalid alias name '$name' (alphanumerics, '_', and '-' only)" >&2; exit 1
+            fi
+            local i existed=false
+            for ((i=0; i<${#names[@]}; i++)); do
+                if [ "${names[$i]}" = "$name" ]; then
+                    if [ "${values[$i]}" = "$value" ]; then
+                        echo "Already in the user config: $name = $value"
+                        exit 0
+                    fi
+                    values[$i]="$value"
+                    existed=true
+                    break
+                fi
+            done
+            if ! $existed; then
+                names+=( "$name" )
+                values+=( "$value" )
+            fi
+            write_aliases_config
+            if $existed; then
+                echo "Updated: $name = $value"
+            else
+                echo "Added: $name = $value"
+            fi
+            ;;
+        rm)
+            local name="${1:-}"
+            [ -n "$name" ] || { echo "maudebox alias rm: NAME required" >&2; exit 1; }
+            local -a kept_names=() kept_values=()
+            local i found=false
+            for ((i=0; i<${#names[@]}; i++)); do
+                if [ "${names[$i]}" = "$name" ] && ! $found; then
+                    found=true
+                else
+                    kept_names+=( "${names[$i]}" )
+                    kept_values+=( "${values[$i]}" )
+                fi
+            done
+            if ! $found; then
+                echo "Not in the user config: $name" >&2
+                exit 1
+            fi
+            names=( "${kept_names[@]+"${kept_names[@]}"}" )
+            values=( "${kept_values[@]+"${kept_values[@]}"}" )
+            write_aliases_config
+            echo "Removed: $name"
+            ;;
+        *)
+            echo "maudebox alias: unknown action '$action' (expected add|list|rm)" >&2
+            exit 1
+            ;;
+    esac
+}
+
 # ── `maudebox keep <id-or-name>` ─────────────────────────────────────────────
 # Find a running ephemeral container by container ID, instance basename, or
 # the original `maudebox new <name>` name, then drop the `keep` flag in its
@@ -629,10 +819,35 @@ case "${1:-}" in
     list)  shift; cmd_list "$@";  exit ;;
     keep)  shift; cmd_keep "$@";  exit ;;
     mount) shift; cmd_mount "$@"; exit ;;
+    alias) shift; cmd_alias "$@"; exit ;;
 esac
 
 PROJECT_DIR="$(realpath "${1:-.}")"
 shift || true   # remaining args become the container command (default: bash)
+
+# ── alias resolution for `maudebox . <cmd>` ──────────────────────────────────
+# Bash aliases only fire for interactive shells, so a non-interactive
+# `docker run … <cmd>` would just try to exec the literal command. If the
+# first remaining arg matches a configured alias name, rewrite
+#   <name> <args>
+# as
+#   bash -c '<alias-value> "$@"' <name> <args>
+# so the alias body runs through container bash (expanding $MAUDEBOX_INSTANCE
+# and any other $VAR references at invocation time) with the trailing args
+# appended via "$@". The alias-name regex matches the same names the
+# `alias add` validator accepts, so paths and obvious non-aliases short-
+# circuit before we read the config.
+if [ $# -gt 0 ] && [[ "$1" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]; then
+    _alias_first="$1"
+    while IFS=$'\t' read -r _alias_name _alias_value; do
+        if [ "$_alias_name" = "$_alias_first" ]; then
+            shift
+            set -- bash -c "$_alias_value \"\$@\"" "$_alias_first" "$@"
+            break
+        fi
+    done < <(parse_toml_aliases "$MAUDEBOX_CONFIG")
+    unset _alias_first _alias_name _alias_value
+fi
 
 # ── detect base repo for jj workspaces / git worktrees ────────────────────────
 # A jj workspace stores the absolute or relative path to the *main* repo's
@@ -774,6 +989,20 @@ for _spec in "${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"}"; do
     build_mount_arg EXTRA_MOUNT_ARGS "$_spec"
 done
 
+# ── user-defined aliases from the user config ────────────────────────────────────
+# Pack the [aliases] table into a single env var (newline-separated
+# `name=value`). The in-container /etc/profile.d/maudebox-aliases.sh script
+# parses it on shell startup and installs each entry as a bash alias.
+ALIASES_ENV=()
+ALIASES_VAL=""
+while IFS=$'\t' read -r _alias_name _alias_value; do
+    [ -n "$_alias_name" ] || continue
+    ALIASES_VAL+="${_alias_name}=${_alias_value}"$'\n'
+done < <(parse_toml_aliases "$MAUDEBOX_CONFIG")
+if [ -n "$ALIASES_VAL" ]; then
+    ALIASES_ENV=( -e "MAUDEBOX_ALIASES=$ALIASES_VAL" )
+fi
+
 # ── run ───────────────────────────────────────────────────────────────────────
 # The same maudebox.* labels go on both the overlay volume and the container.
 # Volumes outlive containers, so labelling the volume is what lets `maudebox
@@ -875,6 +1104,7 @@ docker run --rm -it \
     -e "MAUDEBOX_INSTANCE=$INSTANCE_NAME" \
     "${USER_ENV[@]+"${USER_ENV[@]}"}" \
     "${OVERLAY_ENV[@]+"${OVERLAY_ENV[@]}"}" \
+    "${ALIASES_ENV[@]+"${ALIASES_ENV[@]}"}" \
     "${LABELS[@]}" \
     "${OVERLAY_ARGS[@]+"${OVERLAY_ARGS[@]}"}" \
     "${EPHEMERAL_MOUNT[@]+"${EPHEMERAL_MOUNT[@]}"}" \

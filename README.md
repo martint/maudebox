@@ -111,6 +111,28 @@ maudebox mount rm  ~/.m2:~/.m2:overlay     # remove an exact-match spec
 
 `add` is idempotent (a duplicate spec is left as-is). `rm` requires an exact match against what `mount list` shows — copy-paste from `list` rather than retyping. Only the `mounts = [ ... ]` block in `the user config` is rewritten on mutation; comments and any other TOML content elsewhere in the file are preserved verbatim.
 
+### Aliases
+
+Define bash aliases that get installed automatically inside the container at shell startup. Stored in the `[aliases]` table of `the user config`:
+
+```toml
+[aliases]
+cl = "claude --dangerously-skip-permissions --remote-control $MAUDEBOX_INSTANCE"
+build = "mvnd verify"
+```
+
+Manage from the CLI:
+
+```sh
+maudebox alias add cl 'claude --dangerously-skip-permissions --remote-control $MAUDEBOX_INSTANCE'
+maudebox alias list
+maudebox alias rm cl
+```
+
+Single-quote VALUE on the host so `$MAUDEBOX_INSTANCE` (and any other `$VAR` references) stay literal in the alias definition — they expand each time the alias is invoked, picking up the actual container env. `add` updates the value if the name already exists; `rm` removes by name. Only the `[aliases]` table is rewritten on mutation; the rest of `the user config` is preserved.
+
+Aliases also work when invoked non-interactively via `maudebox <path> <name> <args>`. Bash's built-in alias mechanism only fires for interactive shells, so the wrapper detects an alias name as the first user argument and rewrites the docker run command to `bash -c '<value> "$@"' <name> <args>` — same expansion semantics as the interactive case, with trailing args forwarded through `$@`.
+
 ### Spawning a new workspace or worktree
 
 `maudebox new <name>` creates a fresh jj workspace or git worktree off an existing project and launches `maudebox` on it. By default the workspace persists after the container exits, just like running `maudebox <path>` would — `new` is essentially `mkdir-and-enter`. Pass `--ephemeral` for short-lived scratch workspaces that should be torn down on exit.

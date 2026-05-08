@@ -130,13 +130,18 @@ RUN set -eux; \
 # jj/git worktree metadata resolves), and the entrypoint adds a
 # /root/<basename> symlink pointing at it.
 
-# ── shell prompt with jj/git VCS info ─────────────────────────────────────────
+# ── shell init: prompt + user aliases ────────────────────────────────────────
 # /etc/bash.bashrc is sourced first by interactive non-login shells; /root/.bashrc
 # from the noble base then sets its own PS1, which would override ours. Source
-# our prompt.sh from both — /root/.bashrc runs last and wins.
-COPY --chmod=0644 prompt.sh /etc/profile.d/dev-prompt.sh
-RUN echo '. /etc/profile.d/dev-prompt.sh' >> /etc/bash.bashrc \
- && echo '. /etc/profile.d/dev-prompt.sh' >> /root/.bashrc
+# our scripts from both — /root/.bashrc runs last and wins.
+#
+# aliases.sh consumes the MAUDEBOX_ALIASES env var the wrapper builds from
+# the user's ~/.maudebox `[aliases]` table, installing each entry as a bash
+# alias.
+COPY --chmod=0644 prompt.sh  /etc/profile.d/dev-prompt.sh
+COPY --chmod=0644 aliases.sh /etc/profile.d/maudebox-aliases.sh
+RUN { echo '. /etc/profile.d/dev-prompt.sh';        echo '. /etc/profile.d/maudebox-aliases.sh'; } >> /etc/bash.bashrc \
+ && { echo '. /etc/profile.d/dev-prompt.sh';        echo '. /etc/profile.d/maudebox-aliases.sh'; } >> /root/.bashrc
 
 # ── in-container helper for `maudebox keep` ───────────────────────────────────
 # Lets the user preserve an ephemeral workspace from inside the container by
