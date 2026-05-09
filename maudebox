@@ -285,6 +285,23 @@ parse_mount_spec() {
     printf '%s\t%s\t%s\n' "$src" "$dst" "$mode"
 }
 
+# Canonical key for spec equality. Two specs that mean the same thing
+# should produce the same key — so `~/x:~/x` (mode defaults to rw) and
+# `~/x:~/x:rw` collide on add/rm. Malformed specs are silently passed
+# through as themselves; that's fine for comparison purposes (they
+# won't match anything well-formed and add validates separately).
+mount_spec_key() {
+    local spec="$1"
+    local src dst mode rest
+    IFS=':' read -r src dst mode rest <<<"$spec"
+    if [ -z "$src" ] || [ -z "$dst" ] || [ -n "$rest" ]; then
+        printf '%s' "$spec"
+        return
+    fi
+    : "${mode:=rw}"
+    printf '%s:%s:%s' "$src" "$dst" "$mode"
+}
+
 build_mount_arg() {
     local out_array="$1" spec="$2"
     local src dst mode
@@ -615,10 +632,12 @@ cmd_mount() {
             # Validate before persisting — otherwise garbage lives in the
             # config and the failure surfaces only on the next launch.
             parse_mount_spec "$spec" >/dev/null || exit 1
-            local s
+            local s key new_key
+            new_key="$(mount_spec_key "$spec")"
             for s in "${current[@]+"${current[@]}"}"; do
-                if [ "$s" = "$spec" ]; then
-                    echo "Already in the user config: $spec"
+                key="$(mount_spec_key "$s")"
+                if [ "$key" = "$new_key" ]; then
+                    echo "Already in the user config: $s"
                     exit 0
                 fi
             done
@@ -629,11 +648,14 @@ cmd_mount() {
         rm)
             local spec="${1:-}"
             [ -n "$spec" ] || { echo "maudebox mount rm: SPEC required" >&2; exit 1; }
+            local target_key
+            target_key="$(mount_spec_key "$spec")"
             local -a kept=()
             local found=false
-            local s
+            local s s_key
             for s in "${current[@]+"${current[@]}"}"; do
-                if [ "$s" = "$spec" ] && ! $found; then
+                s_key="$(mount_spec_key "$s")"
+                if [ "$s_key" = "$target_key" ] && ! $found; then
                     found=true
                 else
                     kept+=( "$s" )
