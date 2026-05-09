@@ -930,6 +930,15 @@ detect_vcs_base() {
 
 VCS_BASE="$(detect_vcs_base "$PROJECT_DIR")"
 
+# Refuse to launch against a non-existent path. realpath returns its arg
+# even when the target doesn't exist on either macOS or GNU, so without
+# this check a typoed subcommand (e.g. `maudebox lst` for `list`) silently
+# becomes `realpath ./<typo>` and we spin up a container bind-mounting a
+# phantom directory. The `clean` subcommand is exempt on purpose:
+# cleaning orphan volumes for a since-deleted worktree is a legitimate
+# use.
+[ -d "$PROJECT_DIR" ] || { echo "Not a directory: $PROJECT_DIR" >&2; exit 1; }
+
 # ── Persistent state: maudebox-state volume + read-only host overlays ────────
 # maudebox-state holds writable state shared across all containers/worktrees.
 # A single volume hosts two isolated subtrees, mounted into the container at
