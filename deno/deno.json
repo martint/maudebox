@@ -1,0 +1,28 @@
+{
+    "tasks": {
+        "dev": "deno run -A src/main.ts",
+        "check": "deno check src/main.ts",
+        "fmt": "deno fmt src/",
+        "build": "deno compile -A --output ../maudebox-deno src/main.ts",
+        "build:linux-x64": "deno compile -A --target x86_64-unknown-linux-gnu --output dist/maudebox-linux-x64 src/main.ts",
+        "build:linux-arm64": "deno compile -A --target aarch64-unknown-linux-gnu --output dist/maudebox-linux-arm64 src/main.ts",
+        "build:darwin-x64": "deno compile -A --target x86_64-apple-darwin --output dist/maudebox-darwin-x64 src/main.ts",
+        "build:darwin-arm64": "deno compile -A --target aarch64-apple-darwin --output dist/maudebox-darwin-arm64 src/main.ts",
+        "build:all": "deno task build:linux-x64 && deno task build:linux-arm64 && deno task build:darwin-x64 && deno task build:darwin-arm64"
+    },
+    "imports": {
+        "@std/path": "jsr:@std/path@^1.0.8",
+        "@std/toml": "jsr:@std/toml@^1.0.2",
+        "@std/fs": "jsr:@std/fs@^1.0.6"
+    },
+    "fmt": {
+        "indentWidth": 4,
+        "lineWidth": 100,
+        "singleQuote": false
+    },
+    "compilerOptions": {
+        "strict": true,
+        "noImplicitAny": true,
+        "noUncheckedIndexedAccess": true
+    }
+}
