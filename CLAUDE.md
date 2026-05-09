@@ -24,7 +24,7 @@ maudebox                          # interactive shell, current dir
 maudebox /path/to/proj            # interactive shell, specific project
 maudebox . mvnd verify            # one-shot build inside the container
 maudebox . claude                 # launch Claude Code inside the container
-maudebox --clean /path/to/proj    # delete that worktree's overlay upper volume
+maudebox clean /path/to/proj      # delete that worktree's overlay upper volume
 ```
 
 There are no tests, no linters, and no CI configured in this repo. To validate a change, rebuild the image and exercise the affected path with `maudebox`.
@@ -49,7 +49,7 @@ Both upperdir and workdir live inside the per-overlay Docker volume (host-fs bac
 
 The typical use case is the host's `~/.m2`: every container sees the pre-warmed Maven cache, but writes (downloaded artifacts, locally installed snapshots) go into a volume scoped to that worktree, so concurrent containers for different projects never stomp on each other and the host source is never mutated. Multi-overlay lets you do the same for `~/.cargo`, `~/.gradle`, `~/.npm`, etc. â€” one overlay per polyglot tool. Mounting overlayfs from inside a container requires `--cap-add SYS_ADMIN` and `--security-opt apparmor=unconfined`, which `maudebox` supplies. If a lowerdir is empty or absent, the entrypoint logs a notice and skips that overlay rather than failing. Without any overlay specs, `MAUDEBOX_OVERLAYS` is unset and the entrypoint's overlay loop is a no-op.
 
-`maudebox list` aggregates by project (one row per `maudebox.project` label across all that project's overlay volumes, with an `OVERLAYS` count column). `--clean` removes every volume labelled with the current project, so all of a project's overlays go in one shot.
+`maudebox list` aggregates by project (one row per `maudebox.project` label across all that project's overlay volumes, with an `OVERLAYS` count column). `maudebox clean <path>` removes every volume labelled with that project, so all of a project's overlays go in one shot.
 
 ### Container runs as root, then drops privileges on Linux
 
@@ -118,7 +118,7 @@ The `--ephemeral-name <name>` flag on the inner wrapper invocation is internal â
 
 ### Per-worktree volume naming
 
-`maudebox` derives the upper-layer volume name as `maudebox-overlay-<basename>-<sha256-prefix-of-fullpath>`. The basename keeps it human-readable; the hash prevents collisions when two worktrees share a basename. `--clean` removes only that one volume.
+`maudebox` derives the upper-layer volume name as `maudebox-overlay-<basename>-<sha256-prefix-of-fullpath>`. The basename keeps it human-readable; the hash prevents collisions when two worktrees share a basename. `maudebox clean` removes only that one volume.
 
 ### Multi-arch build
 

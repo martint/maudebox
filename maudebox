@@ -4,10 +4,9 @@
 # Requires the image to already be built via build.sh.
 #
 # Usage:
-#   maudebox [--clean] [--tag TAG] [project-dir] [command...]
+#   maudebox [--tag TAG] [project-dir] [command...]
 #
 # Options:
-#   --clean   remove the overlay volume for this worktree and exit
 #   --tag     image tag to run (default: maudebox)
 #
 # Examples:
@@ -15,12 +14,11 @@
 #   maudebox /path/to/myproject            # interactive shell, specific project
 #   maudebox . mvnd verify                 # run a build
 #   maudebox . claude                      # start Claude Code
-#   maudebox --clean /path/to/myproject    # delete that worktree's overlay volume
+#   maudebox clean /path/to/myproject      # delete that worktree's overlay volume
 
 set -euo pipefail
 
 IMAGE_NAME="maudebox"
-CLEAN=false
 MEMORY_FROM=""
 EPHEMERAL_NAME=""
 EXTRA_MOUNTS=()
@@ -36,9 +34,10 @@ MAUDEBOX_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/maudebox/config.toml"
 
 usage() {
     cat <<'EOF'
-Usage: maudebox [--clean] [--tag TAG] [project-dir] [command...]
+Usage: maudebox [--tag TAG] [project-dir] [command...]
        maudebox new <name> [project-dir] [--path PATH] [--from REV] [--ephemeral] [command...]
        maudebox list
+       maudebox clean [project-dir]
        maudebox keep <id-or-name>
        maudebox mount {add SPEC | list | rm SPEC}
        maudebox alias {add NAME VALUE | list | rm NAME}
@@ -52,7 +51,6 @@ host lower (typically used for ~/.m2 to isolate Maven snapshots per
 worktree without mutating the host cache).
 
 Options:
-  --clean              remove every overlay volume tied to this project and exit
   --tag TAG            image tag to run (default: maudebox)
   --memory-from PATH   share Claude's auto-memory dir with another project
                        (host source keyed to PATH, container target unchanged)
@@ -94,6 +92,11 @@ Subcommands:
                 least one overlay volume), showing its container ID if
                 running, its running/stopped status, instance name,
                 ephemeral status, overlay count, and project path.
+  clean [project-dir]
+                remove every overlay volume tied to project-dir
+                (default: cwd). Works on a since-deleted worktree too,
+                so orphan volumes can still be reclaimed by passing
+                the original path.
   keep <id-or-name>
                 for a running ephemeral instance, prevent its workspace and
                 Maven overlay from being deleted when the container exits.
@@ -123,7 +126,7 @@ Examples:
   maudebox /path/to/myproject            # interactive shell, specific project
   maudebox . mvnd verify                 # run a build
   maudebox . claude                      # start Claude Code
-  maudebox --clean /path/to/myproject    # delete that worktree's overlay volume
+  maudebox clean /path/to/myproject      # delete that worktree's overlay volume
   maudebox new feature-x                 # new workspace from cwd (kept on exit)
   maudebox new feature-x /path/to/proj   # new workspace from a specific project
   maudebox new feature-x --from main     # start from a specific revision
@@ -806,6 +809,27 @@ cmd_keep() {
     echo "Marked '$instance' to keep — workspace and overlay volume will survive when the container exits."
 }
 
+# ── `maudebox clean [project-dir]` ───────────────────────────────────────────
+# Remove every overlay volume tied to a project. Volumes carry the
+# maudebox.project label as their canonical link, so we filter on that
+# rather than on volume names. Doesn't validate that the project dir
+# still exists: cleaning orphan volumes for a since-deleted worktree
+# (by passing its old path) is a legitimate use.
+cmd_clean() {
+    local project_dir
+    project_dir="$(realpath "${1:-.}")"
+    local volumes
+    volumes="$(docker volume ls --filter label=maudebox.project="$project_dir" --format '{{.Name}}')"
+    if [ -z "$volumes" ]; then
+        echo "No overlay volumes found for: $project_dir"
+        return
+    fi
+    while IFS= read -r v; do
+        docker volume rm "$v" > /dev/null
+        echo "Removed volume: $v"
+    done <<< "$volumes"
+}
+
 # ── parse flags ───────────────────────────────────────────────────────────────
 # --ephemeral-name is internal: cmd_new passes it on the recursive invocation
 # so the inner run can label its container as ephemeral. Intentionally not
@@ -813,7 +837,6 @@ cmd_keep() {
 while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
     case "$1" in
         -h|--help)        usage; exit 0 ;;
-        --clean)          CLEAN=true;             shift ;;
         --tag)            IMAGE_NAME="$2";        shift 2 ;;
         --memory-from)    MEMORY_FROM="$2";       shift 2 ;;
         --mount)          EXTRA_MOUNTS+=( "$2" ); shift 2 ;;
@@ -826,6 +849,7 @@ done
 case "${1:-}" in
     new)   shift; cmd_new "$@" ;;
     list)  shift; cmd_list "$@";  exit ;;
+    clean) shift; cmd_clean "$@"; exit ;;
     keep)  shift; cmd_keep "$@";  exit ;;
     mount) shift; cmd_mount "$@"; exit ;;
     alias) shift; cmd_alias "$@"; exit ;;
@@ -905,24 +929,6 @@ detect_vcs_base() {
 }
 
 VCS_BASE="$(detect_vcs_base "$PROJECT_DIR")"
-
-# ── --clean ───────────────────────────────────────────────────────────────────
-# Remove every overlay volume tied to this project. We filter by the
-# `maudebox.project` label rather than the volume name pattern because a
-# project can own multiple overlay volumes (one per overlay target) and the
-# label is the canonical link.
-if $CLEAN; then
-    volumes="$(docker volume ls --filter label=maudebox.project="$PROJECT_DIR" --format '{{.Name}}')"
-    if [ -z "$volumes" ]; then
-        echo "No overlay volumes found for: $PROJECT_DIR"
-    else
-        while IFS= read -r v; do
-            docker volume rm "$v" > /dev/null
-            echo "Removed volume: $v"
-        done <<< "$volumes"
-    fi
-    exit 0
-fi
 
 # ── Persistent state: maudebox-state volume + read-only host overlays ────────
 # maudebox-state holds writable state shared across all containers/worktrees.
@@ -1017,7 +1023,7 @@ fi
 # Volumes outlive containers, so labelling the volume is what lets `maudebox
 # list` recover the project path and ephemeral status for stopped instances.
 # (Pre-existing volumes from before this change won't have labels — they show
-# in the list with derived basename and empty path; a `--clean` + re-run
+# in the list with derived basename and empty path; a `clean` + re-run
 # re-creates them with labels.) EPHEMERAL_NAME is set only when cmd_new
 # spawned us recursively; in that case we also set up a per-instance state
 # dir on the host and bind-mount it at /run/maudebox/ so `maudebox-keep`
@@ -1044,13 +1050,13 @@ fi
 
 # For each overlay mount spec, materialize a per-worktree+per-target upper-
 # layer volume (labeled the same as the container, plus a per-volume
-# `maudebox.overlay-target` label so `--clean` can find it later) and
+# `maudebox.overlay-target` label so `clean` can find it later) and
 # assemble:
 #   - one `-v <host>:/maudebox/overlay-N/lower:ro` for each lowerdir,
 #   - one `-v <volume>:/maudebox/overlay-N/upper` for each upperdir,
 #   - one MAUDEBOX_OVERLAYS env var: newline-separated `lower:upper:target`
 #     triples for the entrypoint to iterate over and mount.
-# No overlay spec → no volumes created → `--clean` is a silent no-op.
+# No overlay spec → no volumes created → `clean` is a silent no-op.
 OVERLAY_ARGS=()
 OVERLAY_ENV=()
 overlay_count="${#OVERLAY_TARGETS[@]}"

@@ -59,7 +59,7 @@ maudebox                          # interactive shell, current directory
 maudebox /path/to/project         # interactive shell, specific project
 maudebox . mvnd verify            # one-shot Maven build
 maudebox . claude                 # launch Claude Code
-maudebox --clean /path/to/project # delete this worktree's Maven overlay volume
+maudebox clean /path/to/project   # delete this worktree's Maven overlay volume
 maudebox --tag my-tag . bash      # use a non-default image tag
 maudebox list                     # list registered maudebox instances
 maudebox keep feature-x           # don't tear down on exit (running ephemeral)
@@ -184,7 +184,7 @@ For each mount spec that uses mode `overlay` (e.g. `~/.m2:~/.m2:overlay`), the c
 
 Effect: builds inside the container see all the artifacts already cached on the host, but anything they download or `install` lands in a worktree-scoped volume. Concurrent containers for different worktrees don't collide. The host source is never mutated. You can declare more than one — e.g. one for Maven, one for Cargo — and each gets its own per-worktree volume. Without any `overlay` mount declared, no overlay is set up and no volume is created — `maudebox` is just a project bind-mount + state volumes.
 
-`maudebox list` aggregates by project and shows an `OVERLAYS` count column. `maudebox --clean <path>` removes every overlay volume tied to that project in one shot.
+`maudebox list` aggregates by project and shows an `OVERLAYS` count column. `maudebox clean <path>` removes every overlay volume tied to that project in one shot.
 
 The per-worktree volume name is derived from the basename of the project directory plus a SHA-256 prefix of its full path:
 
@@ -192,7 +192,7 @@ The per-worktree volume name is derived from the basename of the project directo
 maudebox-overlay-<basename>-<8-char-hash>
 ```
 
-`maudebox --clean <dir>` removes only that one volume.
+`maudebox clean <dir>` removes only that one volume.
 
 ### Login state and global config
 
@@ -228,7 +228,7 @@ Everything lives under `/root`: the Claude config (`/root/.claude`), an opt-in o
 ## Cleanup
 
 ```sh
-maudebox --clean /path/to/project   # remove that worktree's Maven overlay
+maudebox clean /path/to/project     # remove that worktree's Maven overlay
 docker volume rm maudebox-state     # forget persistent Claude + gh logins
 docker rmi maudebox                 # remove the image
 ```
