@@ -1095,6 +1095,32 @@ if [[ "$(uname -s)" == "Linux" ]]; then
     USER_ENV=( -e "HOST_UID=$(id -u)" -e "HOST_GID=$(id -g)" )
 fi
 
+# Forward terminal-identification env vars so apps inside the container
+# (notably Claude Code) can tell what the outer terminal is and gate
+# features like Shift+Enter on it. docker run -it negotiates its own pty
+# with TERM=xterm, which is the right local value — the *outer* terminal
+# capability has to travel separately. TMUX/TMUX_PANE are intentionally
+# skipped: their values are a socket path and pane ID that don't exist
+# inside the container.
+#
+# TERM_PROGRAM is force-set to `tmux` rather than forwarded: from the
+# perspective of the inner process, the maudebox container *is* an extra
+# pty in the chain (just like tmux would be), and TERM_PROGRAM=tmux is
+# the canonical "I'm inside a multiplexer; expect ESC+CR for Shift+Enter"
+# signal that Claude Code's key decoder gates on. When the host is also
+# inside tmux, this is a no-op; when it's iTerm2 directly, the user is
+# expected to have iTerm2 mapped Shift+Enter→\x1b\r per Claude's setup
+# guide, and this makes the container honour that mapping. For the same
+# reason TERM_PROGRAM_VERSION is dropped — it'd advertise iTerm2's
+# version against TERM_PROGRAM=tmux.
+TERM_ENV=( -e "TERM_PROGRAM=tmux" )
+for _v in COLORTERM LC_TERMINAL LC_TERMINAL_VERSION; do
+    if [ -n "${!_v:-}" ]; then
+        TERM_ENV+=( -e "$_v=${!_v}" )
+    fi
+done
+unset _v
+
 echo "Image    : $IMAGE_NAME"
 echo "Worktree : $PROJECT_DIR"
 [ -n "$VCS_BASE" ] && [ "$VCS_BASE" != "$PROJECT_DIR" ] && echo "VCS base : $VCS_BASE"
@@ -1112,6 +1138,7 @@ docker run --rm -it \
     -e "HOST_PROJECT_DIR=$PROJECT_DIR" \
     -e "MAUDEBOX_INSTANCE=$INSTANCE_NAME" \
     "${USER_ENV[@]+"${USER_ENV[@]}"}" \
+    "${TERM_ENV[@]+"${TERM_ENV[@]}"}" \
     "${OVERLAY_ENV[@]+"${OVERLAY_ENV[@]}"}" \
     "${ALIASES_ENV[@]+"${ALIASES_ENV[@]}"}" \
     "${LABELS[@]}" \
