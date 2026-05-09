@@ -260,11 +260,35 @@ parse_toml_aliases() {
 # the corresponding volumes, mounts, and entrypoint env var. The actual
 # `-v` flags for non-overlay mounts get appended to the array named in
 # the first arg.
+# Parse a mount spec into its three fields and validate that each is
+# well-formed. Empty src or dst, an unknown mode, or extra ':'-separated
+# fields would otherwise fall through to docker (or be silently persisted
+# by `mount add`) and the failure would surface far from the typo.
+# Echoes "<src>\t<dst>\t<mode>" on stdout when valid, errors otherwise.
+parse_mount_spec() {
+    local spec="$1"
+    local src dst mode rest
+    IFS=':' read -r src dst mode rest <<<"$spec"
+    if [ -z "$src" ] || [ -z "$dst" ]; then
+        echo "Invalid mount spec: '$spec' (expected HOST:CONTAINER[:ro|rw|overlay])" >&2
+        return 1
+    fi
+    if [ -n "$rest" ]; then
+        echo "Invalid mount spec: '$spec' (too many ':'-separated fields)" >&2
+        return 1
+    fi
+    : "${mode:=rw}"
+    case "$mode" in
+        ro|rw|overlay) ;;
+        *) echo "Invalid mount mode: '$mode' in '$spec' (expected ro, rw, or overlay)" >&2; return 1 ;;
+    esac
+    printf '%s\t%s\t%s\n' "$src" "$dst" "$mode"
+}
+
 build_mount_arg() {
     local out_array="$1" spec="$2"
     local src dst mode
-    IFS=':' read -r src dst mode <<<"$spec"
-    : "${mode:=rw}"
+    IFS=$'\t' read -r src dst mode < <(parse_mount_spec "$spec") || exit 1
     [[ "$src" == "~"* ]] && src="$HOME${src:1}"
     [[ "$dst" == "~"* ]] && dst="${CONTAINER_HOME}${dst:1}"
 
@@ -581,6 +605,9 @@ cmd_mount() {
         add)
             local spec="${1:-}"
             [ -n "$spec" ] || { echo "maudebox mount add: SPEC required" >&2; exit 1; }
+            # Validate before persisting — otherwise garbage lives in the
+            # config and the failure surfaces only on the next launch.
+            parse_mount_spec "$spec" >/dev/null || exit 1
             local s
             for s in "${current[@]+"${current[@]}"}"; do
                 if [ "$s" = "$spec" ]; then
