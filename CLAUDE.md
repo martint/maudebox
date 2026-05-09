@@ -6,15 +6,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Docker-based dev environment that ships JDK 25 (Temurin), `mvnd` (Maven Daemon), `git`, `jj` (jujutsu), and the Claude Code CLI in a single image. The image is meant to be run against an arbitrary host project directory: the host's source tree is bind-mounted at its original host path inside the container (so jj/git worktree metadata resolves). Extra host paths can be exposed via `--mount` flags or a `$XDG_CONFIG_HOME/maudebox/config.toml` config; one of them can opt into mode `overlay`, which layers a per-worktree writable upper over a read-only host lower (the typical use case is `~/.m2`, giving each worktree isolated Maven snapshot writes while sharing the host cache as warm starting state).
 
-The repo contains only the container itself: `Dockerfile`, `build.sh`, `maudebox` (the run wrapper), `entrypoint.sh`, `prompt.sh`. There is no application source code here — changes to this repo are changes to the dev-container itself.
+The repo is a Cargo workspace that builds two things from one tool:
+
+- The host-side `maudebox` wrapper — main package at the repo root (`Cargo.toml`, `src/`).
+- The docker image — recipe + COPYed-in container scripts under `docker/` (`Dockerfile`, `entrypoint.sh`, `prompt.sh`, `aliases.sh`, `maudebox-keep`). The image is driven by the `xtask` helper crate (`xtask/`), wired as a cargo subcommand via `.cargo/config.toml`.
+
+There is no application source code here — changes to this repo are changes to the dev-container itself.
 
 ## Common commands
+
+Build the wrapper binary (drops it at `target/release/maudebox`):
+
+```
+cargo build --release
+```
 
 Build the image (defaults: `mvnd 1.0.5`, `jj 0.41.0`, tag `maudebox`):
 
 ```
-./build.sh
-./build.sh --mvnd-version 1.0.5 --jj-version 0.41.0 --tag maudebox
+cargo xtask image
+cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --tag maudebox
+```
+
+Build everything (wrapper + image) in one go:
+
+```
+cargo xtask all
 ```
 
 Run a container against a host project directory:
@@ -27,7 +44,7 @@ maudebox . claude                 # launch Claude Code inside the container
 maudebox clean /path/to/proj      # delete that worktree's overlay upper volume
 ```
 
-There are no tests, no linters, and no CI configured in this repo. To validate a change, rebuild the image and exercise the affected path with `maudebox`.
+`cargo test` runs the wrapper's unit tests (currently a small parity-with-bash check on the volume-name hashing). To validate a change end-to-end, rebuild the image (`cargo xtask image`) and exercise the affected path with `maudebox`.
 
 ## Architecture
 

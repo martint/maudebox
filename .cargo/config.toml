@@ -1,0 +1,4 @@
+# `cargo xtask <args>` runs the xtask helper crate. Compiled in release so
+# repeated invocations are instant once the first build is cached.
+[alias]
+xtask = "run --package xtask --release --quiet --"
