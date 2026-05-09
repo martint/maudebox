@@ -864,13 +864,25 @@ cmd_clean() {
     done <<< "$volumes"
 }
 
-# ── parse flags ───────────────────────────────────────────────────────────────
+# ── subcommand dispatch + launch flags ───────────────────────────────────────
+# Subcommands that don't run a container (list/clean/keep/mount/alias) get
+# dispatched first, so the launch-only flags below can't silently apply to
+# them. `new` accepts the launch flags (it forwards them to its recursive
+# launch invocation), so it's dispatched after flag parsing.
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    list)  shift; cmd_list "$@";  exit ;;
+    clean) shift; cmd_clean "$@"; exit ;;
+    keep)  shift; cmd_keep "$@";  exit ;;
+    mount) shift; cmd_mount "$@"; exit ;;
+    alias) shift; cmd_alias "$@"; exit ;;
+esac
+
 # --ephemeral-name is internal: cmd_new passes it on the recursive invocation
 # so the inner run can label its container as ephemeral. Intentionally not
 # advertised in --help.
-while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
+while [[ "${1:-}" == --* ]]; do
     case "$1" in
-        -h|--help)        usage; exit 0 ;;
         --tag)            IMAGE_NAME="$2";        shift 2 ;;
         --memory-from)    MEMORY_FROM="$2";       shift 2 ;;
         --mount)          EXTRA_MOUNTS+=( "$2" ); shift 2 ;;
@@ -879,14 +891,15 @@ while [[ "${1:-}" == --* || "${1:-}" == -h ]]; do
     esac
 done
 
-# ── subcommand dispatch ───────────────────────────────────────────────────────
+# Catch `maudebox --tag foo list` (launch flags before a non-launch
+# subcommand) with a clear error rather than letting `list` fall through
+# to PROJECT_DIR validation as "Not a directory: ./list".
 case "${1:-}" in
-    new)   shift; cmd_new "$@" ;;
-    list)  shift; cmd_list "$@";  exit ;;
-    clean) shift; cmd_clean "$@"; exit ;;
-    keep)  shift; cmd_keep "$@";  exit ;;
-    mount) shift; cmd_mount "$@"; exit ;;
-    alias) shift; cmd_alias "$@"; exit ;;
+    new)                       shift; cmd_new "$@" ;;
+    list|clean|keep|mount|alias)
+        echo "Error: '$1' is a subcommand and must come first; --tag/--memory-from/--mount don't apply to it" >&2
+        exit 1
+        ;;
 esac
 
 PROJECT_DIR="$(realpath "${1:-.}")"
