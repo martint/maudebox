@@ -709,6 +709,13 @@ cmd_alias() {
             if [ -z "$name" ] || [ $# -lt 2 ]; then
                 echo "maudebox alias add: NAME VALUE required" >&2; exit 1
             fi
+            # Catch the missing-quote mistake: `alias add cl claude --foo`
+            # silently dropped the trailing args, so `cl` got recorded as
+            # bare `claude`. Refuse the input and point at the fix.
+            if [ $# -gt 2 ]; then
+                echo "maudebox alias add: extra arguments after VALUE — quote VALUE on the shell, e.g. 'claude --foo \$MAUDEBOX_INSTANCE'" >&2
+                exit 1
+            fi
             if ! [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]; then
                 echo "maudebox alias add: invalid alias name '$name' (alphanumerics, '_', and '-' only)" >&2; exit 1
             fi
