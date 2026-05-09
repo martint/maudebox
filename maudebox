@@ -454,6 +454,7 @@ _maudebox_new_cleanup() {
 # treats IFS=$'\t' as whitespace and collapses runs of it — which would lose
 # empty middle fields like an unset label.
 cmd_list() {
+    case "${1:-}" in -h|--help) usage; exit 0 ;; esac
     local vol_fmt='{{.Label "maudebox.project"}}\t{{.Label "maudebox.instance"}}\t{{.Label "maudebox.ephemeral"}}'
     local ps_fmt='{{.Label "maudebox.project"}}\t{{.ID}}\t{{.Label "maudebox.instance"}}\t{{.Label "maudebox.ephemeral"}}'
     local running volumes
@@ -585,6 +586,7 @@ write_mounts_config() {
 }
 
 cmd_mount() {
+    case "${1:-}" in -h|--help) usage; exit 0 ;; esac
     local action="${1:-}"
     [ -n "$action" ] || { echo "maudebox mount: action required (add|list|rm)" >&2; exit 1; }
     shift
@@ -711,6 +713,7 @@ write_aliases_config() {
 }
 
 cmd_alias() {
+    case "${1:-}" in -h|--help) usage; exit 0 ;; esac
     local action="${1:-}"
     [ -n "$action" ] || { echo "maudebox alias: action required (add|list|rm)" >&2; exit 1; }
     shift
@@ -803,6 +806,7 @@ cmd_alias() {
 # the original `maudebox new <name>` name, then drop the `keep` flag in its
 # state dir. A no-op for non-ephemeral instances.
 cmd_keep() {
+    case "${1:-}" in -h|--help) usage; exit 0 ;; esac
     local target="${1:-}"
     [ -n "$target" ] || { echo "maudebox keep: <id-or-name> required" >&2; exit 1; }
 
@@ -850,6 +854,7 @@ cmd_keep() {
 # still exists: cleaning orphan volumes for a since-deleted worktree
 # (by passing its old path) is a legitimate use.
 cmd_clean() {
+    case "${1:-}" in -h|--help) usage; exit 0 ;; esac
     local project_dir
     project_dir="$(realpath "${1:-.}")"
     local volumes
