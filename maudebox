@@ -468,6 +468,11 @@ cmd_list() {
         printf '%s\n' "$running"
     } | awk -F'\037' '$1 != "" {print $1}' | sort -u )"
 
+    if [ -z "$projects" ]; then
+        echo "No maudebox instances found."
+        return 0
+    fi
+
     {
         printf 'ID\tSTATUS\tINSTANCE\tEPHEMERAL\tOVERLAYS\tPATH\n'
         local project vol_sample run_sample _proj instance ephemeral id status state_dir overlays
