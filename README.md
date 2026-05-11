@@ -33,33 +33,36 @@ As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`,
 ## Prerequisites
 
 - Docker (tested with OrbStack on macOS; should work with Docker Desktop and native Linux Docker too).
+- A Rust toolchain (stable, 1.75+) to build the wrapper. `cargo` and `rustc` only.
 - A host with `~/.m2` (optional — only used if you add an `overlay` mount for it).
 - A host with Claude Code installed (optional — its global config under `~/.claude/` is bind-mounted into the container if present).
 
 ## Build
 
-```sh
-./build.sh
-```
-
-Options:
+The repo is a Cargo workspace. One tool builds both the host-side wrapper and the docker image:
 
 ```sh
-./build.sh --mvnd-version 1.0.5 --jj-version 0.41.0 --tag maudebox
+cargo build --release        # wrapper binary at target/release/maudebox
+cargo xtask image            # docker image (defaults: mvnd 1.0.5, jj 0.41.0, tag maudebox)
+cargo xtask all              # both, in one go
 ```
 
-Defaults: `mvnd 1.0.5`, `jj 0.41.0`, image tag `maudebox`.
+Version pins and tag can be overridden:
+
+```sh
+cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --tag maudebox
+```
 
 ## Run
 
-The `maudebox` script is the run wrapper. Put it on your `$PATH` (e.g. `ln -s "$PWD/maudebox" ~/.local/bin/maudebox`) or invoke it as `./maudebox` from the repo. The examples below assume it's on `$PATH`.
+Install the wrapper somewhere on your `$PATH` — either via `cargo install --path .` (drops it under `~/.cargo/bin/`) or by symlinking the release build (`ln -s "$PWD/target/release/maudebox" ~/.local/bin/maudebox`). The examples below assume it's on `$PATH`.
 
 ```sh
 maudebox                          # interactive shell, current directory
 maudebox /path/to/project         # interactive shell, specific project
 maudebox . mvnd verify            # one-shot Maven build
 maudebox . claude                 # launch Claude Code
-maudebox clean /path/to/project   # delete this worktree's Maven overlay volume
+maudebox rm /path/to/project      # tear down an instance (workspace if maudebox created it, plus volumes + state dir)
 maudebox --tag my-tag . bash      # use a non-default image tag
 maudebox list                     # list registered maudebox instances
 maudebox keep feature-x           # don't tear down on exit (running ephemeral)
@@ -153,11 +156,12 @@ Defaults:
 
 #### Ephemeral mode
 
-With `--ephemeral`, an `EXIT` trap fires on normal exit, errors, and Ctrl-C alike, and:
+With `--ephemeral`, the wrapper tears the workspace down once the container exits — on a clean exit, an error, or Ctrl-C alike. The teardown delegates to `maudebox rm`, which reads the manifest `new` wrote into the per-instance state dir and:
 
 - **jj:** runs `jj workspace forget <name>` and `rm -rf <target>`. The change at `@` in that workspace becomes a regular commit in jj's op log, so committed work is recoverable via `jj op log` / `jj op restore`.
 - **git:** runs `git worktree remove --force <target>` and `git branch -D <name>`. Branch tip commits remain reachable via the reflog (default 90 days).
 - **Overlay volume:** the per-worktree `maudebox-overlay-…` volume is removed.
+- **State dir:** the per-instance state dir under `$XDG_STATE_HOME/maudebox/instances/…` is removed last.
 
 Uncommitted working-copy changes are **not** preserved. Commit before exiting the container if you might want them later.
 
@@ -167,6 +171,8 @@ If you've launched an ephemeral instance and later decide you'd rather hold onto
 
 - **From inside the container:** run `maudebox-keep`.
 - **From the host:** run `maudebox keep <id-or-name>`, where the argument is the container ID (as shown by `maudebox list`), the instance basename, or the original name passed to `maudebox new`.
+
+Either form drops a `keep` flag in the state dir. On exit, the wrapper sees the flag, removes only the flag itself (the manifest stays in place), and leaves the workspace, overlay volume, and state dir intact — so a later `maudebox rm <name>` still recognizes the workspace as maudebox-managed and can do the full teardown when you really are done with it.
 
 Either way, when the container exits its workspace and Maven overlay are left in place instead of being deleted. Both are no-ops for non-ephemeral instances. After the container exits, a kept workspace is just a regular jj workspace / git worktree.
 
@@ -184,15 +190,13 @@ For each mount spec that uses mode `overlay` (e.g. `~/.m2:~/.m2:overlay`), the c
 
 Effect: builds inside the container see all the artifacts already cached on the host, but anything they download or `install` lands in a worktree-scoped volume. Concurrent containers for different worktrees don't collide. The host source is never mutated. You can declare more than one — e.g. one for Maven, one for Cargo — and each gets its own per-worktree volume. Without any `overlay` mount declared, no overlay is set up and no volume is created — `maudebox` is just a project bind-mount + state volumes.
 
-`maudebox list` aggregates by project and shows an `OVERLAYS` count column. `maudebox clean <path>` removes every overlay volume tied to that project in one shot.
+`maudebox list` aggregates by project and shows an `OVERLAYS` count column. `maudebox rm <id-or-name-or-path>` removes every overlay volume tied to that project, drops the per-instance state dir, and — if the state dir holds a manifest left by `maudebox new` — also tears down the jj workspace / git worktree. A path handed to `maudebox <path>` directly has no manifest, so `rm` leaves the worktree alone and only cleans up what maudebox itself created.
 
 The per-worktree volume name is derived from the basename of the project directory plus a SHA-256 prefix of its full path:
 
 ```
 maudebox-overlay-<basename>-<8-char-hash>
 ```
-
-`maudebox clean <dir>` removes only that one volume.
 
 ### Login state and global config
 
@@ -228,15 +232,19 @@ Everything lives under `/root`: the Claude config (`/root/.claude`), an opt-in o
 ## Cleanup
 
 ```sh
-maudebox clean /path/to/project     # remove that worktree's Maven overlay
+maudebox rm /path/to/project        # tear down an instance (workspace if maudebox created it, plus volumes + state dir)
 docker volume rm maudebox-state     # forget persistent Claude + gh logins
 docker rmi maudebox                 # remove the image
 ```
 
-## Files
+## Layout
 
-- `Dockerfile` — image definition
-- `build.sh` — wrapper around `docker build` with version flags
-- `maudebox` — wrapper around `docker run` that wires up all the volume mounts
-- `entrypoint.sh` — overlayfs setup + Claude state symlink, then `exec` the user command
-- `prompt.sh` — bash prompt with jj/git VCS info, sourced from `/etc/bash.bashrc`
+- `Cargo.toml`, `src/` — the host-side `maudebox` wrapper (single binary, no runtime deps).
+- `xtask/` — small Rust helper crate wired in as `cargo xtask`. Drives `docker build` (and, for `all`, also `cargo build --release`).
+- `.cargo/config.toml` — defines the `xtask` alias so `cargo xtask <subcommand>` works.
+- `docker/` — everything the image is built from:
+    - `Dockerfile` — image definition.
+    - `entrypoint.sh` — overlayfs setup, UID drop on Linux, Claude state symlink, then `exec` the user command.
+    - `prompt.sh` — bash prompt with jj/git VCS info, sourced from `/etc/bash.bashrc`.
+    - `aliases.sh` — installs entries from `MAUDEBOX_ALIASES` as interactive shell aliases.
+    - `maudebox-keep` — in-container script for disarming ephemeral cleanup.

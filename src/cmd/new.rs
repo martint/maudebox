@@ -1,6 +1,7 @@
 use crate::cmd::run::{run as run_cmd, RunOptions};
-use crate::docker;
-use crate::volume::{compute_state_dir, compute_volume_name};
+use crate::cmd::rm;
+use crate::manifest::{self, Manifest, WorkspaceKind};
+use crate::volume::compute_state_dir;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::path::{Path, PathBuf};
@@ -28,20 +29,6 @@ pub struct NewArgs {
     /// otherwise everything is the container command.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "REST")]
     pub rest: Vec<String>,
-}
-
-#[derive(Clone, Copy)]
-enum Kind {
-    Jj,
-    Git,
-}
-impl Kind {
-    fn name(self) -> &'static str {
-        match self {
-            Kind::Jj => "jj",
-            Kind::Git => "git",
-        }
-    }
 }
 
 // Create a jj workspace or git worktree from a source project and run
@@ -93,9 +80,9 @@ pub fn run(args: NewArgs, image: String, extra_mounts: Vec<String>) -> Result<i3
         return Ok(1);
     }
 
-    let kind: Kind;
+    let kind: WorkspaceKind;
     if source.join(".jj").exists() {
-        kind = Kind::Jj;
+        kind = WorkspaceKind::Jj;
         println!("Creating jj workspace '{name}' at: {}", target.display());
         let mut jj_args: Vec<String> =
             vec!["workspace".into(), "add".into(), "--name".into(), name.clone()];
@@ -106,7 +93,7 @@ pub fn run(args: NewArgs, image: String, extra_mounts: Vec<String>) -> Result<i3
         jj_args.push(target.display().to_string());
         run_in(&source, "jj", &jj_args)?;
     } else if source.join(".git").exists() {
-        kind = Kind::Git;
+        kind = WorkspaceKind::Git;
         let rev: &str = if from_rev.is_empty() { "HEAD" } else { from_rev.as_str() };
         println!(
             "Creating git worktree '{name}' at: {} (branch: {name} from {rev})",
@@ -129,6 +116,18 @@ pub fn run(args: NewArgs, image: String, extra_mounts: Vec<String>) -> Result<i3
         return Ok(1);
     }
 
+    // Persist the manifest in the state dir. Its presence is what lets `rm`
+    // distinguish a maudebox-created worktree from a user-handed path.
+    let state_dir = compute_state_dir(&target)?;
+    manifest::write(
+        &state_dir,
+        &Manifest {
+            kind,
+            source: source.display().to_string(),
+            name: name.clone(),
+        },
+    )?;
+
     // Recursive launch — call run_cmd directly rather than spawning another
     // wrapper process. Same effect, fewer hops.
     let rc = run_cmd(RunOptions {
@@ -141,7 +140,7 @@ pub fn run(args: NewArgs, image: String, extra_mounts: Vec<String>) -> Result<i3
     });
 
     if ephemeral {
-        if let Err(e) = ephemeral_cleanup(&name, &target, &source, kind) {
+        if let Err(e) = ephemeral_cleanup(&target) {
             eprintln!("cleanup error: {e}");
         }
     }
@@ -149,52 +148,22 @@ pub fn run(args: NewArgs, image: String, extra_mounts: Vec<String>) -> Result<i3
     rc
 }
 
-fn ephemeral_cleanup(name: &str, target: &Path, source: &Path, kind: Kind) -> Result<()> {
+// Run after an `--ephemeral` container exits. The user may have disarmed
+// cleanup mid-session by dropping a `keep` file (via in-container
+// `maudebox-keep` or host `maudebox keep`); honour that by removing only the
+// keep flag and leaving the manifest in place, so the workspace is preserved
+// AND a future `rm` still recognizes it as maudebox-owned.
+fn ephemeral_cleanup(target: &Path) -> Result<()> {
     let state_dir = compute_state_dir(target)?;
-
-    // The user (in-container `maudebox-keep` or host `maudebox keep`) can
-    // drop a `keep` file in the state dir to disarm cleanup mid-session.
-    // Honour it — but still drop the now-stale state dir so a future
-    // `maudebox` invocation against this same path starts fresh (it's no
-    // longer ephemeral after this point).
-    if state_dir.join("keep").exists() {
-        println!(
-            "Keep flag set; preserving {} workspace at: {}",
-            kind.name(),
-            target.display()
-        );
-        let _ = std::fs::remove_dir_all(&state_dir);
+    let keep = state_dir.join("keep");
+    if keep.exists() {
+        println!("Keep flag set; preserving workspace at: {}", target.display());
+        let _ = std::fs::remove_file(&keep);
         return Ok(());
     }
-
-    println!(
-        "Cleaning up ephemeral {} workspace at: {}",
-        kind.name(),
-        target.display()
-    );
-    match kind {
-        Kind::Jj => {
-            let _ = run_in(source, "jj", &["workspace".into(), "forget".into(), name.into()]);
-            let _ = std::fs::remove_dir_all(target);
-        }
-        Kind::Git => {
-            let _ = run_in(
-                source,
-                "git",
-                &[
-                    "worktree".into(),
-                    "remove".into(),
-                    "--force".into(),
-                    target.display().to_string(),
-                ],
-            );
-            let _ = run_in(source, "git", &["branch".into(), "-D".into(), name.into()]);
-        }
-    }
-    let volume = compute_volume_name(target);
-    // best-effort: a non-overlay run never created the volume.
-    let _ = docker::capture(&["volume", "rm", &volume]);
-    let _ = std::fs::remove_dir_all(&state_dir);
+    // Full teardown lives in `rm` now — manifest-driven, identifier-aware,
+    // and shared with the host-side `maudebox rm` command.
+    let _ = rm::run(&target.display().to_string());
     Ok(())
 }
 

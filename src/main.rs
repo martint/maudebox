@@ -8,6 +8,7 @@
 mod cmd;
 mod config;
 mod docker;
+mod manifest;
 mod mount;
 mod paths;
 mod vcs;
@@ -32,7 +33,6 @@ const EXAMPLES: &str = "Examples:
   maudebox /path/to/myproject            # interactive shell, specific project
   maudebox . mvnd verify                 # run a build
   maudebox . claude                      # start Claude Code
-  maudebox clean /path/to/myproject      # delete that worktree's overlay volume
   maudebox new feature-x                 # new workspace from cwd (kept on exit)
   maudebox new feature-x /path/to/proj   # new workspace from a specific project
   maudebox new feature-x --from main     # start from a specific revision
@@ -40,6 +40,8 @@ const EXAMPLES: &str = "Examples:
   maudebox new feature-x mvnd verify     # spawn workspace, run a build in it
   maudebox list                          # list registered maudebox instances
   maudebox keep feature-x                # don't tear down on exit
+  maudebox rm feature-x                  # full teardown of an instance
+  maudebox rm /path/to/myproject         # remove volumes + state for a path
   maudebox --mount ~/.aws:~/.aws:ro      # bind ~/.aws read-only into the container
   maudebox mount add ~/.m2:~/.m2:overlay # persist a mount in the user config
   maudebox alias add cl 'claude --dangerously-skip-permissions --remote-control $MAUDEBOX_INSTANCE'
@@ -86,11 +88,15 @@ enum Command {
     /// List every registered maudebox instance.
     List,
 
-    /// Remove every overlay volume tied to a project (default: cwd).
-    Clean {
-        /// Project dir.
-        #[arg(default_value = ".")]
-        project_dir: String,
+    /// Remove a maudebox-managed instance (workspace, overlay volumes, state dir).
+    ///
+    /// For projects created by `maudebox new`, this also tears down the
+    /// jj workspace / git worktree. For paths handed to `maudebox <path>`
+    /// directly, only volumes and state dir are removed — the worktree is
+    /// left alone since maudebox didn't create it.
+    Rm {
+        /// Container ID, instance basename, `new`'s `<name>`, or a project path.
+        target: String,
     },
 
     /// Disarm ephemeral cleanup on a running instance.
@@ -143,7 +149,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
             default_run(tag, memory_from, mount, project_dir, inner)
         }
         Some(Command::List) => cmd::list::run(),
-        Some(Command::Clean { project_dir }) => cmd::clean::run(&project_dir),
+        Some(Command::Rm { target }) => cmd::rm::run(&target),
         Some(Command::Keep { target }) => cmd::keep::run(&target),
         Some(Command::Mount(args)) => cmd::mount::run(args.action),
         Some(Command::Alias(args)) => cmd::alias::run(args.action),

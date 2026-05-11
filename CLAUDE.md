@@ -41,7 +41,7 @@ maudebox                          # interactive shell, current dir
 maudebox /path/to/proj            # interactive shell, specific project
 maudebox . mvnd verify            # one-shot build inside the container
 maudebox . claude                 # launch Claude Code inside the container
-maudebox clean /path/to/proj      # delete that worktree's overlay upper volume
+maudebox rm /path/to/proj         # tear down an instance (workspace if maudebox created it, plus overlay volumes + state dir)
 ```
 
 `cargo test` runs the wrapper's unit tests (currently a small parity-with-bash check on the volume-name hashing). To validate a change end-to-end, rebuild the image (`cargo xtask image`) and exercise the affected path with `maudebox`.
@@ -66,7 +66,7 @@ Both upperdir and workdir live inside the per-overlay Docker volume (host-fs bac
 
 The typical use case is the host's `~/.m2`: every container sees the pre-warmed Maven cache, but writes (downloaded artifacts, locally installed snapshots) go into a volume scoped to that worktree, so concurrent containers for different projects never stomp on each other and the host source is never mutated. Multi-overlay lets you do the same for `~/.cargo`, `~/.gradle`, `~/.npm`, etc. — one overlay per polyglot tool. Mounting overlayfs from inside a container requires `--cap-add SYS_ADMIN` and `--security-opt apparmor=unconfined`, which `maudebox` supplies. If a lowerdir is empty or absent, the entrypoint logs a notice and skips that overlay rather than failing. Without any overlay specs, `MAUDEBOX_OVERLAYS` is unset and the entrypoint's overlay loop is a no-op.
 
-`maudebox list` aggregates by project (one row per `maudebox.project` label across all that project's overlay volumes, with an `OVERLAYS` count column). `maudebox clean <path>` removes every volume labelled with that project, so all of a project's overlays go in one shot.
+`maudebox list` aggregates by project (one row per `maudebox.project` label across all that project's overlay volumes, with an `OVERLAYS` count column). `maudebox rm <id-or-name-or-path>` removes every volume labelled with that project plus the per-instance state dir, and — if the state dir holds a manifest left by `maudebox new` — also tears down the jj workspace / git worktree. For a path handed to `maudebox <path>` directly, the worktree is left alone since maudebox didn't create it; only the volumes and state dir come off.
 
 ### Container runs as root, then drops privileges on Linux
 
@@ -129,13 +129,13 @@ One narrow carve-out under `projects/`: Claude Code's auto-memory directory `~/.
 
 Every container is stamped with `maudebox.*` labels at run time so the wrapper can find its own containers without parsing image names: `maudebox.instance` (project basename), `maudebox.project` (host path), `maudebox.ephemeral=true|false`. For ephemeral runs (`maudebox new …` without `--keep`), two more labels are set: `maudebox.ephemeral-name` (the user-supplied name) and `maudebox.state-dir` (host path of the per-instance state dir).
 
-The state dir lives at `${XDG_STATE_HOME:-~/.local/state}/maudebox/instances/<volume-name>/` (keyed off the same volume name as the overlay), is created by the wrapper before `docker run`, and is bind-mounted at `/run/maudebox/` inside the container. The in-container `maudebox-keep` script (and the host-side `maudebox keep <name>`) just `touch` a `keep` file there. The `_maudebox_new_cleanup` trap reads `<state-dir>/keep` after the container exits and skips destruction when present. The state dir is removed on cleanup either way, so a kept workspace's next `maudebox` run is a normal (non-ephemeral) one.
+The state dir lives at `${XDG_STATE_HOME:-~/.local/state}/maudebox/instances/<volume-name>/` (keyed off the same volume name as the overlay). `maudebox new` always creates it and writes a `manifest.toml` recording the workspace kind, source repo, and `<name>` — its presence is what tells `maudebox rm` that maudebox itself created the worktree (vs. a path the user handed to `maudebox <path>` directly). For ephemeral runs the dir is also bind-mounted at `/run/maudebox/` inside the container so the in-container `maudebox-keep` script (and the host-side `maudebox keep <name>`) can drop a `keep` file. On exit the ephemeral cleanup reads `<state-dir>/keep`: if present, only the keep flag is removed (the manifest stays, so a future `rm` still recognizes the workspace as maudebox-owned); otherwise `rm` is invoked to do the full teardown.
 
-The `--ephemeral-name <name>` flag on the inner wrapper invocation is internal — `cmd_new` passes it on its recursive call so the inner run knows it's ephemeral and labels itself accordingly. It's intentionally not in `--help`. Don't expose it as a public flag; the right way to spawn ephemerals is `maudebox new`.
+`cmd::new` calls `cmd::run::run` in-process when launching the inner container, so the ephemeral state (name, source, kind) doesn't need to travel through CLI args — it's held in the call stack and persisted via the manifest. There is no public flag for "launch this inner container as ephemeral"; the right way to spawn ephemerals is `maudebox new --ephemeral`.
 
 ### Per-worktree volume naming
 
-`maudebox` derives the upper-layer volume name as `maudebox-overlay-<basename>-<sha256-prefix-of-fullpath>`. The basename keeps it human-readable; the hash prevents collisions when two worktrees share a basename. `maudebox clean` removes only that one volume.
+`maudebox` derives the upper-layer volume name as `maudebox-overlay-<basename>-<sha256-prefix-of-fullpath>`. The basename keeps it human-readable; the hash prevents collisions when two worktrees share a basename. `maudebox rm` removes only that one project's volumes.
 
 ### Multi-arch build
 
