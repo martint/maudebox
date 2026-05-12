@@ -78,6 +78,8 @@ The container starts as root (UID 0) and stays that way for the privileged setup
 
 Everything still lives at `/root` regardless of platform: the Claude config volume (`/root/.claude`), an opt-in overlay target (typically `/root/.m2`), and a `/root/<basename>` symlink to the worktree's host path. The `ubuntu` user from the noble base may collide with `HOST_UID=1000` on Linux, which is why the entrypoint *replaces* any existing passwd entry for `HOST_UID` rather than appending — otherwise `/home/ubuntu` would win as pw_dir.
 
+Because of the Linux privilege drop, in-container privileged operations (`apt-get install`, `mount`, etc.) fail with `Permission denied`. The image installs `sudo` and drops a `/etc/sudoers.d/host` rule granting the runtime `host` user passwordless sudo, so the escape hatch is `sudo apt-get install …` (or `sudo -i` for a root shell). The rule is inert on macOS/OrbStack where the session stays root anyway.
+
 ### jj workspaces / git worktrees
 
 Both jj workspaces and git worktrees store an absolute (or relative-to-cwd) path to the *base* repo inside the worktree's metadata: `<workspace>/.jj/repo` is a file containing the path to the main repo's `.jj/repo` directory; `<worktree>/.git` is a file containing `gitdir: <abs path>` to the main's `.git/worktrees/<name>`. If we just mount the worktree at some unrelated container path, those references point into nothing and `jj` / `git` fail with confusing errors.

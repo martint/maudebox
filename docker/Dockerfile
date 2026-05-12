@@ -70,10 +70,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         less \
         ripgrep \
+        sudo \
         unzip \
         util-linux \
         vim \
     && rm -rf /var/lib/apt/lists/*
+
+# On Linux the entrypoint drops to a "host" user at HOST_UID before exec'ing
+# the user command, so privileged work (apt-get, mounts, etc.) needs sudo.
+# Grant passwordless sudo to that fixed username; the rule is inert on
+# macOS/OrbStack where the session stays root.
+RUN echo 'host ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/host \
+ && chmod 0440 /etc/sudoers.d/host
 
 # ── mvnd ──────────────────────────────────────────────────────────────────────
 # Detect host arch so the image builds on both amd64 and arm64
