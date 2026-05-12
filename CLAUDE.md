@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A Docker-based dev environment that ships JDK 25 (Temurin), `mvnd` (Maven Daemon), `git`, `jj` (jujutsu), and the Claude Code CLI in a single image. The image is meant to be run against an arbitrary host project directory: the host's source tree is bind-mounted at its original host path inside the container (so jj/git worktree metadata resolves). Extra host paths can be exposed via `--mount` flags or a `$XDG_CONFIG_HOME/maudebox/config.toml` config; one of them can opt into mode `overlay`, which layers a per-worktree writable upper over a read-only host lower (the typical use case is `~/.m2`, giving each worktree isolated Maven snapshot writes while sharing the host cache as warm starting state).
+A Docker-based dev environment that ships JDK 25 (Temurin), `mvnd` (Maven Daemon), a Rust toolchain (rustup-managed), `git`, `jj` (jujutsu), and the Claude Code CLI in a single image. The image is meant to be run against an arbitrary host project directory: the host's source tree is bind-mounted at its original host path inside the container (so jj/git worktree metadata resolves). Extra host paths can be exposed via `--mount` flags or a `$XDG_CONFIG_HOME/maudebox/config.toml` config; one of them can opt into mode `overlay`, which layers a per-worktree writable upper over a read-only host lower (the typical use case is `~/.m2`, giving each worktree isolated Maven snapshot writes while sharing the host cache as warm starting state).
 
 The repo is a Cargo workspace that builds two things from one tool:
 
@@ -141,7 +141,9 @@ The state dir lives at `${XDG_STATE_HOME:-~/.local/state}/maudebox/instances/<vo
 
 ### Multi-arch build
 
-Both `mvnd` and `jj` install steps in the `Dockerfile` branch on `uname -m` to pick `amd64`/`aarch64` artifacts, so the image builds natively on Apple Silicon and x86_64 hosts. `jj` uses the musl static binaries to avoid libc-version coupling to the base image.
+The `mvnd`, `jj`, and Rust install steps in the `Dockerfile` branch on `uname -m` to pick `amd64`/`aarch64` artifacts, so the image builds natively on Apple Silicon and x86_64 hosts. `jj` uses the musl static binaries to avoid libc-version coupling to the base image; Rust uses the gnu triple since its toolchain dynamically links to the same glibc the base image already provides.
+
+Rust installs via `rustup-init` (pinned version) with `RUSTUP_HOME=/usr/local/rustup` and `CARGO_HOME=/usr/local/cargo` set permanently. Putting both under `/usr/local` keeps the toolchain out of any `~/.cargo` overlay a user might configure; `chmod -R a+w` on the install dirs lets the Linux dropped-privilege user populate the registry cache without sudo. If you do want per-worktree isolation of cargo's package cache, add an overlay spec for `/usr/local/cargo` (or override `CARGO_HOME` to a path under `~`) — the toolchain itself stays put either way.
 
 ### Claude Code install
 

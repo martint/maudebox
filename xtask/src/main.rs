@@ -12,6 +12,7 @@ use std::process::{Command, ExitCode};
 
 const DEFAULT_MVND_VERSION: &str = "1.0.5";
 const DEFAULT_JJ_VERSION: &str = "0.41.0";
+const DEFAULT_RUST_VERSION: &str = "1.85.0";
 const DEFAULT_TAG: &str = "maudebox";
 
 const USAGE: &str = "\
@@ -25,6 +26,7 @@ Subcommands:
 Options for `image` and `all`:
   --mvnd-version VERSION   default: 1.0.5
   --jj-version VERSION     default: 0.41.0
+  --rust-version VERSION   default: 1.85.0
   --tag TAG                default: maudebox
 ";
 
@@ -60,6 +62,7 @@ fn run(args: &[String]) -> Result<i32, String> {
 struct ImageOpts {
     mvnd_version: String,
     jj_version: String,
+    rust_version: String,
     tag: String,
 }
 
@@ -67,6 +70,7 @@ fn parse_image_opts(args: &[String]) -> Result<ImageOpts, String> {
     let mut opts = ImageOpts {
         mvnd_version: DEFAULT_MVND_VERSION.into(),
         jj_version: DEFAULT_JJ_VERSION.into(),
+        rust_version: DEFAULT_RUST_VERSION.into(),
         tag: DEFAULT_TAG.into(),
     };
     let mut i = 0;
@@ -85,6 +89,10 @@ fn parse_image_opts(args: &[String]) -> Result<ImageOpts, String> {
             }
             "--jj-version" => {
                 opts.jj_version = val()?;
+                i += 2;
+            }
+            "--rust-version" => {
+                opts.rust_version = val()?;
                 i += 2;
             }
             "--tag" => {
@@ -129,12 +137,15 @@ fn build_image(opts: &ImageOpts) -> Result<i32, String> {
     println!("==> docker build -t {} {}", opts.tag, context.display());
     println!("    mvnd : {}", opts.mvnd_version);
     println!("    jj   : {}", opts.jj_version);
+    println!("    rust : {}", opts.rust_version);
     let status = Command::new("docker")
         .arg("build")
         .arg("--build-arg")
         .arg(format!("MVND_VERSION={}", opts.mvnd_version))
         .arg("--build-arg")
         .arg(format!("JJ_VERSION={}", opts.jj_version))
+        .arg("--build-arg")
+        .arg(format!("RUST_VERSION={}", opts.rust_version))
         .arg("-t")
         .arg(&opts.tag)
         .arg(&context)

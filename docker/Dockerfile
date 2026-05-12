@@ -3,6 +3,7 @@ FROM eclipse-temurin:25-jdk-noble
 
 ARG MVND_VERSION=1.0.5
 ARG JJ_VERSION=0.41.0
+ARG RUST_VERSION=1.85.0
 
 # The container starts as root for the privileged setup (overlay mount, volume
 # chowns) and on Linux drops to the host UID before exec'ing the user command —
@@ -130,6 +131,38 @@ RUN set -eux; \
     && tar -xzf /tmp/jj.tar.gz -C /usr/local/bin ./jj \
     && chmod +x /usr/local/bin/jj \
     && rm /tmp/jj.tar.gz
+
+# ── rust ─────────────────────────────────────────────────────────────────────
+# Install via rustup into /usr/local so the toolchain lives outside any volume
+# mount — an opt-in `~/.cargo` overlay would otherwise hide the binaries.
+# CARGO_HOME and RUSTUP_HOME are set permanently (matches the official
+# rust:slim image); a+w on both lets the Linux dropped-privilege user populate
+# the registry cache and run `cargo install` without sudo. The rustup-init
+# binary is the smallest bootstrap surface — fetch the pinned version, run
+# once with a fixed default toolchain, then drop it.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+        x86_64)  RUST_ARCH="x86_64-unknown-linux-gnu"  ;; \
+        aarch64) RUST_ARCH="aarch64-unknown-linux-gnu" ;; \
+        *)       echo "Unsupported arch: $ARCH" && exit 1 ;; \
+    esac; \
+    RUSTUP_VERSION="1.27.1"; \
+    curl --proto '=https' --tlsv1.2 -fsSL \
+        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${RUST_ARCH}/rustup-init" \
+        -o /tmp/rustup-init \
+    && chmod +x /tmp/rustup-init \
+    && /tmp/rustup-init -y \
+        --no-modify-path \
+        --profile minimal \
+        --default-toolchain "${RUST_VERSION}" \
+        --default-host "${RUST_ARCH}" \
+    && rm /tmp/rustup-init \
+    && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"
 
 # Overlay mount points (e.g. /maudebox/overlay-N/{lower,upper}) are created
 # at runtime by Docker when the wrapper passes -v for them, so no build-time
