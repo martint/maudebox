@@ -94,7 +94,7 @@ Edge cases: a regular `git` checkout (`.git` is a directory) or a non-VCS dir is
 
 ### Shell prompt (jj/git aware)
 
-`prompt.sh` is `COPY`'d to `/etc/profile.d/dev-prompt.sh` and sourced from `/etc/bash.bashrc`. It defines a `__dev_prompt_vcs` function used as `PROMPT_COMMAND` and a two-line `PS1` of the form `cyan/path  yellow/(vcs)\n green/#`.
+`prompt.sh` is `COPY`'d to `/etc/profile.d/dev-prompt.sh` and sourced from `/etc/bash.bashrc`. It defines a `__dev_prompt_vcs` function used as `PROMPT_COMMAND` and a two-line `PS1` of the form `cyan/path  yellow/(vcs)\n green/>`. Bash's traditional convention is `#` for root and `$` for everyone else, but on Linux the entrypoint drops privileges from a session that *was* root, so neither matches cleanly — `>` sidesteps the confusion.
 
 For VCS info: it tries jj first (`jj workspace root` → if inside, look up change ID and closest bookmark), and falls back to git's symbolic-ref/short-hash. The `closest_bookmark(to) = heads(::to & bookmarks())` revset alias is passed inline via `jj log --config=...` so we don't need to mount the user's jj config. The whole thing is a stripped-down bash port of the host's powerlevel10k `prompt_my_jj` segment — same data, no zsh/p10k/Nerd Font dependency.
 

@@ -40,6 +40,9 @@ PROMPT_COMMAND='__dev_prompt_vcs'
 
 # Two-line prompt:
 #   cyan/path  yellow/(vcs)
-#   green/#
+#   green/>
+# Avoid the conventional `#`/`$` split: the container session starts as root
+# and on Linux drops to HOST_UID before the user shell, so neither symbol
+# accurately reflects "who am I". A neutral `>` sidesteps the confusion.
 # \[...\] are non-printing markers so bash counts visible width correctly.
-PS1='\[\033[36m\]\w\[\033[0m\]${VCS_PROMPT:+ \[\033[33m\]($VCS_PROMPT)\[\033[0m\]}\n\[\033[1;32m\]#\[\033[0m\] '
+PS1='\[\033[36m\]\w\[\033[0m\]${VCS_PROMPT:+ \[\033[33m\]($VCS_PROMPT)\[\033[0m\]}\n\[\033[1;32m\]>\[\033[0m\] '
