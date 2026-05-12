@@ -5,6 +5,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 - Eclipse Temurin JDK 25
 - [`mvnd`](https://github.com/apache/maven-mvnd) (Maven Daemon) — symlinked as both `mvnd` and `mvn`
 - A Rust toolchain (rustup-managed, default 1.85.0) plus `build-essential` for crates with native dependencies
+- [`bun`](https://bun.sh) and [`pnpm`](https://pnpm.io) for JavaScript/TypeScript work (pnpm bundles its own Node.js; bun is its own runtime)
 - `git` and [`jj`](https://github.com/jj-vcs/jj) (Jujutsu VCS)
 - Claude Code CLI
 - GitHub CLI (`gh`)
@@ -52,7 +53,7 @@ cargo xtask all              # both, in one go
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --rust-version 1.85.0 --tag maudebox
+cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --rust-version 1.85.0 --bun-version 1.3.13 --pnpm-version 11.1.0 --tag maudebox
 ```
 
 ## Run

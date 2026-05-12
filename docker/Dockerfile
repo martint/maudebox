@@ -4,6 +4,8 @@ FROM eclipse-temurin:25-jdk-noble
 ARG MVND_VERSION=1.0.5
 ARG JJ_VERSION=0.41.0
 ARG RUST_VERSION=1.85.0
+ARG BUN_VERSION=1.3.13
+ARG PNPM_VERSION=11.1.0
 
 # The container starts as root for the privileged setup (overlay mount, volume
 # chowns) and on Linux drops to the host UID before exec'ing the user command —
@@ -163,6 +165,53 @@ RUN set -eux; \
         --default-host "${RUST_ARCH}" \
     && rm /tmp/rustup-init \
     && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"
+
+# ── bun ──────────────────────────────────────────────────────────────────────
+# Single statically-linked binary inside a zip; arch-suffixed asset names
+# follow the same `uname -m` mapping as mvnd/jj. The glibc build matches the
+# noble base; bun also ships a `-musl` variant we deliberately don't use.
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+        x86_64)  BUN_ARCH="x64"     ;; \
+        aarch64) BUN_ARCH="aarch64" ;; \
+        *)       echo "Unsupported arch: $ARCH" && exit 1 ;; \
+    esac; \
+    curl -fsSL \
+        "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${BUN_ARCH}.zip" \
+        -o /tmp/bun.zip \
+    && unzip -j /tmp/bun.zip "bun-linux-${BUN_ARCH}/bun" -d /usr/local/bin \
+    && chmod +x /usr/local/bin/bun \
+    && rm /tmp/bun.zip
+
+# ── pnpm ─────────────────────────────────────────────────────────────────────
+# pnpm 11 ships a small native launcher plus a `dist/` tree of JS the launcher
+# exec's into — they must stay co-located, so we extract the whole tarball to
+# /opt/pnpm and symlink the launcher onto PATH (same shape as mvnd).
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+        x86_64)  PNPM_ARCH="x64"   ;; \
+        aarch64) PNPM_ARCH="arm64" ;; \
+        *)       echo "Unsupported arch: $ARCH" && exit 1 ;; \
+    esac; \
+    mkdir -p /opt/pnpm \
+    && curl -fsSL \
+        "https://github.com/pnpm/pnpm/releases/download/v${PNPM_VERSION}/pnpm-linux-${PNPM_ARCH}.tar.gz" \
+        -o /tmp/pnpm.tar.gz \
+    && tar -xzf /tmp/pnpm.tar.gz -C /opt/pnpm \
+    && rm /tmp/pnpm.tar.gz \
+    && ln -s /opt/pnpm/pnpm /usr/local/bin/pnpm
+
+# Make `bun install -g …` and `pnpm install -g …` discoverable without further
+# setup. bun's global-install dir defaults to ~/.bun/bin; pnpm requires
+# PNPM_HOME to be set and on PATH or it prints "Run `pnpm setup`…" and globals
+# land in a dir the shell can't find. Both dirs also make convenient overlay
+# targets — add `~/.bun:~/.bun:overlay` or
+# `~/.local/share/pnpm:~/.local/share/pnpm:overlay` to your config to give
+# each worktree its own writable cache layered over a shared host warm-start.
+ENV PNPM_HOME=/root/.local/share/pnpm
+ENV PATH=/root/.bun/bin:/root/.local/share/pnpm:$PATH
 
 # Overlay mount points (e.g. /maudebox/overlay-N/{lower,upper}) are created
 # at runtime by Docker when the wrapper passes -v for them, so no build-time

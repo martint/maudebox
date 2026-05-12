@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A Docker-based dev environment that ships JDK 25 (Temurin), `mvnd` (Maven Daemon), a Rust toolchain (rustup-managed), `git`, `jj` (jujutsu), and the Claude Code CLI in a single image. The image is meant to be run against an arbitrary host project directory: the host's source tree is bind-mounted at its original host path inside the container (so jj/git worktree metadata resolves). Extra host paths can be exposed via `--mount` flags or a `$XDG_CONFIG_HOME/maudebox/config.toml` config; one of them can opt into mode `overlay`, which layers a per-worktree writable upper over a read-only host lower (the typical use case is `~/.m2`, giving each worktree isolated Maven snapshot writes while sharing the host cache as warm starting state).
+A Docker-based dev environment that ships JDK 25 (Temurin), `mvnd` (Maven Daemon), a Rust toolchain (rustup-managed), `bun`, `pnpm`, `git`, `jj` (jujutsu), and the Claude Code CLI in a single image. The image is meant to be run against an arbitrary host project directory: the host's source tree is bind-mounted at its original host path inside the container (so jj/git worktree metadata resolves). Extra host paths can be exposed via `--mount` flags or a `$XDG_CONFIG_HOME/maudebox/config.toml` config; one of them can opt into mode `overlay`, which layers a per-worktree writable upper over a read-only host lower (the typical use case is `~/.m2`, giving each worktree isolated Maven snapshot writes while sharing the host cache as warm starting state).
 
 The repo is a Cargo workspace that builds two things from one tool:
 
@@ -21,11 +21,11 @@ Build the wrapper binary (drops it at `target/release/maudebox`):
 cargo build --release
 ```
 
-Build the image (defaults: `mvnd 1.0.5`, `jj 0.41.0`, tag `maudebox`):
+Build the image (defaults: `mvnd 1.0.5`, `jj 0.41.0`, `bun 1.3.13`, `pnpm 11.1.0`, tag `maudebox`):
 
 ```
 cargo xtask image
-cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --tag maudebox
+cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --bun-version 1.3.13 --pnpm-version 11.1.0 --tag maudebox
 ```
 
 Build everything (wrapper + image) in one go:
@@ -141,9 +141,11 @@ The state dir lives at `${XDG_STATE_HOME:-~/.local/state}/maudebox/instances/<vo
 
 ### Multi-arch build
 
-The `mvnd`, `jj`, and Rust install steps in the `Dockerfile` branch on `uname -m` to pick `amd64`/`aarch64` artifacts, so the image builds natively on Apple Silicon and x86_64 hosts. `jj` uses the musl static binaries to avoid libc-version coupling to the base image; Rust uses the gnu triple since its toolchain dynamically links to the same glibc the base image already provides.
+The `mvnd`, `jj`, Rust, `bun`, and `pnpm` install steps in the `Dockerfile` branch on `uname -m` to pick `amd64`/`aarch64` artifacts, so the image builds natively on Apple Silicon and x86_64 hosts. `jj` uses the musl static binaries to avoid libc-version coupling to the base image; Rust uses the gnu triple since its toolchain dynamically links to the same glibc the base image already provides. `bun` uses the glibc build (not the `-musl` variant) to match the base; `pnpm` ships a native launcher + `dist/` JS tree which must stay co-located, so we extract the whole tarball under `/opt/pnpm` and symlink the launcher onto `PATH`.
 
 Rust installs via `rustup-init` (pinned version) with `RUSTUP_HOME=/usr/local/rustup` and `CARGO_HOME=/usr/local/cargo` set permanently. Putting both under `/usr/local` keeps the toolchain out of any `~/.cargo` overlay a user might configure; `chmod -R a+w` on the install dirs lets the Linux dropped-privilege user populate the registry cache without sudo. If you do want per-worktree isolation of cargo's package cache, add an overlay spec for `/usr/local/cargo` (or override `CARGO_HOME` to a path under `~`) — the toolchain itself stays put either way.
+
+Bun and pnpm install global packages into the runtime user's HOME: bun's `bun install -g` lands at `~/.bun/bin`, pnpm's `pnpm install -g` lands in `$PNPM_HOME` (preset to `~/.local/share/pnpm`). Both paths are prepended to `PATH` in the Dockerfile so `-g` installs are immediately discoverable and `pnpm setup` doesn't need to run inside every container — pnpm refuses to install globals at all without `PNPM_HOME` set. An overlay spec for either dir (e.g. `~/.bun:~/.bun:overlay`) is supported but **not** motivated by Maven's clobber-by-coordinate problem: bun/pnpm/cargo caches are content-addressed (keyed by tarball hash or `name-version`) and workspace-internal deps resolve via path/workspace links, never through the cache, so concurrent worktrees sharing one cache are safe at the artifact level. Overlay still buys you hermeticity (a `bun i -g foo` in one worktree won't leak to another), race-free cold-fill under heavy concurrency, and isolation of the global-bin namespace — useful, but a nice-to-have, not load-bearing the way `~/.m2:overlay` is.
 
 ### Claude Code install
 
