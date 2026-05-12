@@ -1,12 +1,14 @@
 # maudebox
 
-A Docker image for working on Maven projects with [Claude Code](https://claude.ai/code) in an isolated, reproducible Linux environment. Bundles:
+A Docker image for working on Maven projects (and adjacent polyglot bits) with [Claude Code](https://claude.ai/code) in an isolated, reproducible Linux environment. Bundles:
 
 - Eclipse Temurin JDK 25
 - [`mvnd`](https://github.com/apache/maven-mvnd) (Maven Daemon) — symlinked as both `mvnd` and `mvn`
+- A Rust toolchain (rustup-managed, default 1.85.0) plus `build-essential` for crates with native dependencies
 - `git` and [`jj`](https://github.com/jj-vcs/jj) (Jujutsu VCS)
 - Claude Code CLI
 - GitHub CLI (`gh`)
+- `ripgrep`, `vim`, `less`, `sudo`
 
 Builds natively on amd64 and arm64.
 
@@ -50,7 +52,7 @@ cargo xtask all              # both, in one go
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --tag maudebox
+cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --rust-version 1.85.0 --tag maudebox
 ```
 
 ## Run
@@ -228,6 +230,8 @@ This means: **log in to Claude Code (and `gh`) once inside any container**, and 
 The container runs as **root** (UID 0) on macOS. This is intentional: OrbStack and similar virtiofs setups root-squash the host bind-mounts, so files in the lower layer of an overlay mount appear as `uid=0` inside the container. Overlayfs preserves that UID on copy-up, which means a non-root container user couldn't write to anything pre-existing in the host source. Running as root sidesteps the whole class of "permission denied on file inherited from the host" failures (mvnd registry, Aether lock files, install-plugin tmp files, etc.). On Linux the entrypoint drops privileges to the host UID after the privileged setup steps are done.
 
 Everything lives under `/root`: the Claude config (`/root/.claude`), an opt-in overlay target (typically `/root/.m2`), and a `/root/<basename>` symlink to your worktree's host path. Files written to bind-mounted paths land back on the host owned by your host user, courtesy of virtiofs UID translation (macOS) or the privilege drop (Linux).
+
+Because of the Linux privilege drop, in-container privileged operations (`apt-get install`, `mount`, etc.) fail with `Permission denied`. The image installs `sudo` and grants the runtime user passwordless sudo, so the escape hatch is `sudo apt-get install …` (or `sudo -i` for a root shell). The rule is inert on macOS/OrbStack where the session stays root anyway.
 
 ## Cleanup
 
