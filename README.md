@@ -139,6 +139,12 @@ Single-quote VALUE on the host so `$MAUDEBOX_INSTANCE` (and any other `$VAR` ref
 
 Aliases also work when invoked non-interactively via `maudebox <path> <name> <args>`. Bash's built-in alias mechanism only fires for interactive shells, so the wrapper detects an alias name as the first user argument and rewrites the docker run command to `bash -c '<value> "$@"' <name> <args>` — same expansion semantics as the interactive case, with trailing args forwarded through `$@`.
 
+### Reaching host services
+
+The container can reach services running on the host (e.g. an HTTP MCP server, a local dev API) at `host.docker.internal`. `maudebox` passes `--add-host=host.docker.internal:host-gateway` to `docker run` so this resolves on Linux as well as macOS/OrbStack. From inside the container, point at `http://host.docker.internal:<port>`; `localhost` still means the container itself.
+
+For an HTTP MCP server in particular, either drop a `.mcp.json` at the project root with the URL (it's bind-mounted in and Claude picks it up automatically), or run `claude mcp add --transport http <name> http://host.docker.internal:<port>` once — that persists in the shared state volume and is available in every future container.
+
 ### Spawning a new workspace or worktree
 
 `maudebox new <name>` creates a fresh jj workspace or git worktree off an existing project and launches `maudebox` on it. By default the workspace persists after the container exits, just like running `maudebox <path>` would — `new` is essentially `mkdir-and-enter`. Pass `--ephemeral` for short-lived scratch workspaces that should be torn down on exit.

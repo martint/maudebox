@@ -220,6 +220,8 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         "SYS_ADMIN".into(),
         "--security-opt".into(),
         "apparmor=unconfined".into(),
+        "--add-host".into(),
+        "host.docker.internal:host-gateway".into(),
         "-e".into(),
         format!("HOST_PROJECT_DIR={}", project_dir.display()),
         "-e".into(),
