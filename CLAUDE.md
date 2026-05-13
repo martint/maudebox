@@ -127,6 +127,8 @@ One narrow carve-out under `projects/`: Claude Code's auto-memory directory `~/.
 
 `~/.claude.json` (login token + project list) lives outside `~/.claude/` on the host, so it can't be picked up by the volume mount. The entrypoint instead symlinks `~/.claude.json → ~/.claude/state.json` so writes follow into the persistent volume. The user must log into Claude Code once inside any container; subsequent containers share that login. Same applies to `gh auth login`.
 
+Managed MCP servers (the `[mcp.NAME]` tables in `config.toml`) are layered on top via a separate bind mount, not via the state volume. On every launch the wrapper serializes the tables to `$XDG_STATE_HOME/maudebox/managed-mcp.json` (atomic write) and bind-mounts it read-only at `/etc/claude-code/managed-mcp.json`, which Claude Code reads as enterprise-managed scope. The mount target's parent dir is created in the Dockerfile so it always exists; the bind itself is only added when at least one `[mcp.*]` table is configured. Atomic rename matters: Docker captures the file's inode at mount time, so a later rewrite (from a concurrent maudebox launch with a different config) doesn't perturb an already-running container.
+
 ### Container labels and the `keep` flag for ephemeral instances
 
 Every container is stamped with `maudebox.*` labels at run time so the wrapper can find its own containers without parsing image names: `maudebox.instance` (project basename), `maudebox.project` (host path), `maudebox.ephemeral=true|false`. For ephemeral runs (`maudebox new …` without `--keep`), two more labels are set: `maudebox.ephemeral-name` (the user-supplied name) and `maudebox.state-dir` (host path of the per-instance state dir).

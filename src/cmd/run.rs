@@ -1,10 +1,10 @@
-use crate::config::{read_aliases, read_mounts};
+use crate::config::{read_aliases, read_mcp_servers, read_mounts};
 use crate::docker;
 use crate::mount::{build_mount_plan, MountPlan};
-use crate::paths::{canonicalize, home, STATE_VOLUME};
+use crate::paths::{canonicalize, home, xdg_state_home, STATE_VOLUME};
 use crate::vcs::detect_vcs_base;
 use crate::volume::{compute_overlay_volume, compute_state_dir};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
@@ -94,6 +94,22 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         vcs_config_mounts.push(format!(
             "{}:/root/.config/jj/config.toml:ro",
             jj_config.display()
+        ));
+    }
+
+    // ── managed MCP servers (config-file [mcp.NAME] tables) ────────────────
+    // Translate the user's TOML into a managed-mcp.json on the host and
+    // bind-mount it at /etc/claude-code/managed-mcp.json — Claude Code reads
+    // that path as enterprise-managed scope, so servers apply to every
+    // session without per-launch CLI work. No-op when the config has no
+    // [mcp.*] tables.
+    let mut managed_mcp_mount: Vec<String> = Vec::new();
+    if let Some(servers) = read_mcp_servers()? {
+        let host_path = write_managed_mcp_json(&servers)?;
+        managed_mcp_mount.push("-v".into());
+        managed_mcp_mount.push(format!(
+            "{}:/etc/claude-code/managed-mcp.json:ro",
+            host_path.display()
         ));
     }
 
@@ -236,6 +252,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     args.extend(ephemeral_mount);
     args.extend(project_mounts);
     args.extend(claude_mounts);
+    args.extend(managed_mcp_mount);
     args.extend(vcs_config_mounts);
     args.extend(extra_mount_args);
     args.push(opts.image.clone());
@@ -282,6 +299,38 @@ fn is_valid_alias_name(s: &str) -> bool {
         return false;
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+// Serialize `[mcp.NAME]` tables to `{"mcpServers": {...}}` JSON and write
+// atomically to a stable host path. Docker captures the file inode at bind-
+// mount time, so concurrent maudebox launches with different configs each see
+// their own snapshot — atomic rename keeps any already-running container
+// pointing at its original inode.
+fn write_managed_mcp_json(
+    servers: &std::collections::BTreeMap<String, toml::Value>,
+) -> Result<PathBuf> {
+    let dir = xdg_state_home()?.join("maudebox");
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join("managed-mcp.json");
+
+    // toml::Value: Serialize and serde_json::Value: Deserialize, so the
+    // round-trip lifts TOML straight to JSON. No datetime support is needed
+    // — MCP server configs are strings/arrays/objects.
+    let mut root = serde_json::Map::new();
+    let mut inner = serde_json::Map::new();
+    for (name, val) in servers {
+        let json_val: serde_json::Value = serde_json::to_value(val)
+            .with_context(|| format!("converting mcp.{name} to JSON"))?;
+        inner.insert(name.clone(), json_val);
+    }
+    root.insert("mcpServers".to_string(), serde_json::Value::Object(inner));
+    let content = serde_json::to_string_pretty(&serde_json::Value::Object(root))?;
+
+    let tmp = dir.join(format!("managed-mcp.json.tmp.{}", std::process::id()));
+    fs::write(&tmp, content).with_context(|| format!("writing {}", tmp.display()))?;
+    fs::rename(&tmp, &path)
+        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+    Ok(path)
 }
 
 // Encode a host path into Claude's auto-memory directory key: replace '/' and

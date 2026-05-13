@@ -27,6 +27,36 @@ pub fn read_mounts() -> Result<Vec<String>> {
         .collect())
 }
 
+// MCP server definitions live in `[mcp.NAME]` tables and map 1:1 to the
+// `mcpServers` object of Claude Code's managed-MCP JSON. We pass each entry
+// through unchanged — Claude validates the shape itself, and the set of valid
+// fields (type, url, command, args, env, headers, …) changes over time.
+// Returns None when no `[mcp]` table is present (caller skips the whole code
+// path), Some(Map) otherwise. BTreeMap gives stable iteration order for
+// reproducible JSON output.
+pub fn read_mcp_servers() -> Result<Option<std::collections::BTreeMap<String, toml::Value>>> {
+    let path = config_path()?;
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).context(format!("reading {}", path.display())),
+    };
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let table = match v.get("mcp").and_then(|v| v.as_table()) {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+    if table.is_empty() {
+        return Ok(None);
+    }
+    let mut out = std::collections::BTreeMap::new();
+    for (k, val) in table {
+        out.insert(k.clone(), val.clone());
+    }
+    Ok(Some(out))
+}
+
 // Aliases preserve insertion order in the file. Use a Vec of (name, value)
 // rather than BTreeMap so listing order matches what the user wrote.
 pub fn read_aliases() -> Result<Vec<(String, String)>> {

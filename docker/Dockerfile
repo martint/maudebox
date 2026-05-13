@@ -86,6 +86,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN echo 'host ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/host \
  && chmod 0440 /etc/sudoers.d/host
 
+# Claude Code reads /etc/claude-code/managed-mcp.json as enterprise-managed
+# MCP scope. The maudebox wrapper materializes this file from the user's
+# config.toml [mcp.NAME] tables and bind-mounts it at the path below; pre-
+# creating the parent dir lets the mount target's parent always exist even
+# when no MCP servers are configured (the wrapper just skips the mount).
+RUN mkdir -p /etc/claude-code
+
 # ── mvnd ──────────────────────────────────────────────────────────────────────
 # Detect host arch so the image builds on both amd64 and arm64
 RUN set -eux; \

@@ -145,6 +145,38 @@ The container can reach services running on the host (e.g. an HTTP MCP server, a
 
 For an HTTP MCP server in particular, either drop a `.mcp.json` at the project root with the URL (it's bind-mounted in and Claude picks it up automatically), or run `claude mcp add --transport http <name> http://host.docker.internal:<port>` once — that persists in the shared state volume and is available in every future container.
 
+### Managed MCP servers
+
+If you want one or more MCP servers available in **every** maudebox container with no per-container `claude mcp add`, declare them in the user config as `[mcp.NAME]` tables:
+
+```toml
+[mcp.my_http]
+type = "http"
+url = "http://host.docker.internal:8080/mcp"
+
+[mcp.my_stdio]
+type = "stdio"
+command = "python"
+args = ["-m", "my_server"]
+
+[mcp.my_stdio.env]
+DEBUG = "1"
+```
+
+`maudebox` serializes the table to `$XDG_STATE_HOME/maudebox/managed-mcp.json` on each launch and bind-mounts it read-only at `/etc/claude-code/managed-mcp.json` inside the container. Claude Code reads that path as **managed scope**, so every session loads these servers automatically — they show up in `claude mcp list` and don't need `claude mcp add`. The field set inside each `[mcp.NAME]` table is passed through verbatim (validation is Claude's job); see Claude Code's MCP docs for the available fields (`type`, `url`, `command`, `args`, `env`, `headers`, …).
+
+To reach a server running on the host, use `host.docker.internal` as shown above (see *Reaching host services*). Remove or comment out the table to drop the server — the file isn't written when no `[mcp.*]` tables are present, and managed scope is read-only inside the container (users can't disable an entry via `claude mcp remove`).
+
+Verify inside the container with `claude mcp list` — managed entries are loaded automatically:
+
+```
+$ claude mcp list
+my_http: http://host.docker.internal:8080/mcp (HTTP) - ✓ Connected
+my_stdio: python -m my_server (stdio) - ✓ Connected
+```
+
+Edits to the user config only take effect for **new** containers; an already-running container keeps using the snapshot of the file it was launched with. Exit and relaunch `maudebox` to pick up changes.
+
 ### Spawning a new workspace or worktree
 
 `maudebox new <name>` creates a fresh jj workspace or git worktree off an existing project and launches `maudebox` on it. By default the workspace persists after the container exits, just like running `maudebox <path>` would — `new` is essentially `mkdir-and-enter`. Pass `--ephemeral` for short-lived scratch workspaces that should be torn down on exit.
