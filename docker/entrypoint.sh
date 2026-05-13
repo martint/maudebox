@@ -103,6 +103,19 @@ if [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ] && [ "$HOST_UID" != "0" ]; t
     sed -i "/^[^:]*:[^:]*:${HOST_GID}:/d" /etc/group
     echo "host:x:${HOST_GID}:" >> /etc/group
 
+    # `x` in /etc/passwd defers the password lookup to /etc/shadow. PAM's
+    # account-management step (pam_unix.so account, pulled in by sudo via
+    # common-account) reads shadow to validate the account isn't expired or
+    # locked — and rejects the user with PAM_USER_UNKNOWN if there's no entry
+    # at all. NOPASSWD in sudoers skips the *auth* step but not the *account*
+    # step, so without a shadow entry every sudo invocation fails with
+    # "account validation failure, is your account locked?". Write a locked-
+    # password entry (`*` = no valid hash, can never log in via password) with
+    # empty aging fields so the account never expires. Sudo's auth-bypass via
+    # NOPASSWD then completes successfully.
+    sed -i "/^host:/d" /etc/shadow
+    echo 'host:*:::::::' >> /etc/shadow
+
     # Hand ownership of the writable trees to HOST_UID. Docker creates volumes
     # root-owned, and /root is root-owned from the image build, so without this
     # the dropped-privilege user can't write anything. -xdev keeps find from
