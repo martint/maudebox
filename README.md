@@ -5,6 +5,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 - Eclipse Temurin JDK 25
 - [`mvnd`](https://github.com/apache/maven-mvnd) (Maven Daemon) — symlinked as both `mvnd` and `mvn`
 - A Rust toolchain (rustup-managed, default 1.85.0) plus `build-essential` for crates with native dependencies
+- Python 3 with `pip`, `venv`, and development headers (`python` is symlinked to `python3`)
 - [`bun`](https://bun.sh) and [`pnpm`](https://pnpm.io) for JavaScript/TypeScript work (pnpm bundles its own Node.js; bun is its own runtime)
 - `git` and [`jj`](https://github.com/jj-vcs/jj) (Jujutsu VCS)
 - Claude Code CLI
