@@ -12,7 +12,7 @@ use std::process::{Command, ExitCode};
 
 const DEFAULT_MVND_VERSION: &str = "1.0.5";
 const DEFAULT_JJ_VERSION: &str = "0.41.0";
-const DEFAULT_RUST_VERSION: &str = "1.85.0";
+const DEFAULT_RUST_VERSION: &str = "1.95.0";
 const DEFAULT_BUN_VERSION: &str = "1.3.13";
 const DEFAULT_PNPM_VERSION: &str = "11.1.0";
 const DEFAULT_TAG: &str = "maudebox";
@@ -28,7 +28,7 @@ Subcommands:
 Options for `image` and `all`:
   --mvnd-version VERSION   default: 1.0.5
   --jj-version VERSION     default: 0.41.0
-  --rust-version VERSION   default: 1.85.0
+  --rust-version VERSION   default: 1.95.0
   --bun-version VERSION    default: 1.3.13
   --pnpm-version VERSION   default: 11.1.0
   --tag TAG                default: maudebox
