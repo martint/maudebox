@@ -4,6 +4,7 @@
 // path the user handed to `maudebox <path>` directly, which maudebox didn't
 // create and must leave alone).
 
+use crate::paths::xdg_state_home;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -33,6 +34,11 @@ pub struct Manifest {
     pub source: String,
     /// Workspace/branch name as passed to `maudebox new`.
     pub name: String,
+    /// Host path of the workspace/worktree itself. Used by `maudebox <name>`
+    /// to reattach without typing the path. Defaulted for backward
+    /// compatibility with manifests written before this field existed.
+    #[serde(default)]
+    pub target: String,
 }
 
 pub fn manifest_path(state_dir: &Path) -> PathBuf {
@@ -61,6 +67,38 @@ pub fn read(state_dir: &Path) -> Result<Option<Manifest>> {
     }
 }
 
+// Walk $XDG_STATE_HOME/maudebox/instances/* and return every manifest whose
+// `name` matches `query` and whose recorded target still exists on disk.
+// Used by `maudebox <name>` to reattach without the user typing the worktree
+// path. Manifests written before the `target` field existed are skipped (the
+// field is empty, so there's nothing to reattach to); the user can fall back
+// to `maudebox <path>`.
+pub fn find_by_name(query: &str) -> Result<Vec<(PathBuf, Manifest)>> {
+    let root = xdg_state_home()?.join("maudebox").join("instances");
+    let entries = match fs::read_dir(&root) {
+        Ok(e) => e,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", root.display())),
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Ok(Some(m)) = read(&path) else { continue };
+        if m.name != query || m.target.is_empty() {
+            continue;
+        }
+        let target = PathBuf::from(&m.target);
+        if !target.is_dir() {
+            continue;
+        }
+        out.push((target, m));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,12 +112,33 @@ mod tests {
             kind: WorkspaceKind::Jj,
             source: "/home/user/projects/myproj".into(),
             name: "feature-x".into(),
+            target: "/home/user/projects/myproj.feature-x".into(),
         };
         write(&tmp, &m).unwrap();
         let back = read(&tmp).unwrap().unwrap();
         assert_eq!(back.kind, WorkspaceKind::Jj);
         assert_eq!(back.source, m.source);
         assert_eq!(back.name, m.name);
+        assert_eq!(back.target, m.target);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // Pre-target-field manifests should still load; the field defaults to "".
+    #[test]
+    fn manifest_legacy_no_target_field() {
+        let tmp = env::temp_dir()
+            .join(format!("maudebox-manifest-legacy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let legacy = r#"kind = "git"
+source = "/home/user/projects/myproj"
+name = "feature-x"
+"#;
+        fs::write(manifest_path(&tmp), legacy).unwrap();
+        let back = read(&tmp).unwrap().unwrap();
+        assert_eq!(back.kind, WorkspaceKind::Git);
+        assert_eq!(back.name, "feature-x");
+        assert_eq!(back.target, "");
         fs::remove_dir_all(&tmp).unwrap();
     }
 

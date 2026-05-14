@@ -207,6 +207,19 @@ Defaults:
 - **Starting revision:** jj's `@-` for jj, `HEAD` for git. Override with `--from REV`. For git, a new branch named `<name>` is created at that revision.
 - **VCS choice:** jj is preferred when both `.jj/` and `.git` are present (colocated repos).
 
+#### Reattaching to a non-ephemeral workspace
+
+After `maudebox new <name>` exits (without `--ephemeral`), the workspace persists at its sibling path. You don't need to remember the path to re-launch it — `maudebox <name>` looks the name up in the manifest store and reattaches:
+
+```sh
+maudebox new feature-x         # creates worktree at <project>/../<basename>.feature-x
+exit
+maudebox feature-x             # re-enters the same workspace
+maudebox feature-x mvnd verify # …or run a one-shot command in it
+```
+
+Name lookup is only attempted when the first positional doesn't look like a path (no leading `/`, `.`, `~` and no embedded `/`). A bare name has to match exactly one workspace whose target directory still exists on disk; ambiguous matches across projects bail out asking for the full path, and a miss falls through to the regular `<path>` handling. Workspaces created by older maudebox versions (before the worktree path was recorded in the manifest) aren't reattachable by name — keep launching them via `maudebox <path>` until they're torn down.
+
 #### Ephemeral mode
 
 With `--ephemeral`, the wrapper tears the workspace down once the container exits — on a clean exit, an error, or Ctrl-C alike. The teardown delegates to `maudebox rm`, which reads the manifest `new` wrote into the per-instance state dir and:

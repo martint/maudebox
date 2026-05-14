@@ -1,6 +1,6 @@
 use crate::docker;
 use crate::manifest::{self, Manifest, WorkspaceKind};
-use crate::paths::canonicalize;
+use crate::paths::{canonicalize, looks_like_path};
 use crate::volume::compute_state_dir;
 use anyhow::{bail, Context, Result};
 use std::fs;
@@ -81,10 +81,6 @@ fn resolve_target(target: &str) -> Result<PathBuf> {
         bail!("{msg}");
     }
     Ok(PathBuf::from(&all[0]))
-}
-
-fn looks_like_path(s: &str) -> bool {
-    s.starts_with('/') || s.starts_with('.') || s.starts_with('~') || s.contains('/')
 }
 
 fn lookup_by_volume_label(name: &str) -> Result<Vec<String>> {

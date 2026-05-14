@@ -14,9 +14,9 @@ mod paths;
 mod vcs;
 mod volume;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use paths::IMAGE_NAME_DEFAULT;
+use paths::{looks_like_path, IMAGE_NAME_DEFAULT};
 use std::process::ExitCode;
 
 const LONG_ABOUT: &str = "\
@@ -156,8 +156,9 @@ fn dispatch(cli: Cli) -> Result<i32> {
         None => default_run(tag, memory_from, mount, instance, ".".to_string(), Vec::new()),
         Some(Command::Default(args)) => {
             let mut it = args.into_iter();
-            let project_dir = it.next().unwrap_or_else(|| ".".to_string());
+            let first = it.next().unwrap_or_else(|| ".".to_string());
             let inner: Vec<String> = it.collect();
+            let project_dir = resolve_project_arg(&first)?;
             default_run(tag, memory_from, mount, instance, project_dir, inner)
         }
         Some(Command::List) => cmd::list::run(),
@@ -167,6 +168,33 @@ fn dispatch(cli: Cli) -> Result<i32> {
         Some(Command::Alias(args)) => cmd::alias::run(args.action),
         Some(Command::New(args)) => cmd::new::run(args, tag, mount, instance),
     }
+}
+
+// Resolve the first positional of the default-run shape. Path-shaped inputs
+// (anything starting with `/`, `.`, `~`, or containing `/`) pass through
+// unchanged for the existing canonicalize step downstream. A bare identifier
+// is looked up in the manifest store: if exactly one `maudebox new` workspace
+// matches by name, its recorded target path is used so the user can reattach
+// with just `maudebox <name>`. A miss falls through to the canonicalize path
+// too, preserving the original "Not a directory" error for typos.
+fn resolve_project_arg(input: &str) -> Result<String> {
+    if looks_like_path(input) {
+        return Ok(input.to_string());
+    }
+    let matches = manifest::find_by_name(input)?;
+    if matches.is_empty() {
+        return Ok(input.to_string());
+    }
+    if matches.len() > 1 {
+        let mut msg = format!("Multiple workspaces named '{input}':\n");
+        for (path, _) in &matches {
+            msg.push_str(&format!("  {}\n", path.display()));
+        }
+        msg.push_str("Re-run with the full path.");
+        bail!("{msg}");
+    }
+    let (path, _) = matches.into_iter().next().unwrap();
+    Ok(path.display().to_string())
 }
 
 fn default_run(

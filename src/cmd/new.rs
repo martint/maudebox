@@ -122,7 +122,9 @@ pub fn run(
     }
 
     // Persist the manifest in the state dir. Its presence is what lets `rm`
-    // distinguish a maudebox-created worktree from a user-handed path.
+    // distinguish a maudebox-created worktree from a user-handed path; the
+    // recorded `target` is what lets `maudebox <name>` reattach without the
+    // user typing the worktree path back.
     let state_dir = compute_state_dir(&target)?;
     manifest::write(
         &state_dir,
@@ -130,6 +132,7 @@ pub fn run(
             kind,
             source: source.display().to_string(),
             name: name.clone(),
+            target: target.display().to_string(),
         },
     )?;
 

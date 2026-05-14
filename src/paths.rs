@@ -71,3 +71,13 @@ pub fn expand_container_tilde(p: &str) -> String {
         p.to_string()
     }
 }
+
+// True if a CLI argument looks like a filesystem path rather than a bare
+// identifier. Used to decide whether to canonicalize directly or try to
+// resolve it through the maudebox state store (manifest names, container
+// labels, …). The rule mirrors what shells already imply: a leading `/`,
+// `.`, or `~`, or an embedded `/`, all unambiguously mean "path"; everything
+// else is a candidate for name lookup.
+pub fn looks_like_path(s: &str) -> bool {
+    s.starts_with('/') || s.starts_with('.') || s.starts_with('~') || s.contains('/')
+}
