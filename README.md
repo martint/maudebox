@@ -149,6 +149,17 @@ maudebox alias rm cl
 
 Single-quote VALUE on the host so `$MAUDEBOX_INSTANCE` (and any other `$VAR` references) stay literal in the alias definition — they expand each time the alias is invoked, picking up the actual container env. `add` updates the value if the name already exists; `rm` removes by name. Only the `[aliases]` table is rewritten on mutation; the rest of `the user config` is preserved.
 
+### Editing the user config directly
+
+For anything the `mount` / `alias` subcommands don't cover (e.g. `[mcp.*]` tables), open the file in your editor:
+
+```sh
+maudebox config edit    # opens $VISUAL / $EDITOR (or vi) on the config file
+maudebox config path    # prints the path, e.g. for piping to other tools
+```
+
+`config edit` honors `$VISUAL` first, then `$EDITOR`, and finally falls back to `vi`. The command runs through `sh -c` so editor values that embed flags (e.g. `EDITOR="code --wait"`) work as-is. The parent directory (`$XDG_CONFIG_HOME/maudebox/`) is created if it doesn't already exist; the file itself is left to the editor to create on save.
+
 Aliases also work when invoked non-interactively via `maudebox <path> <name> <args>`. Bash's built-in alias mechanism only fires for interactive shells, so the wrapper detects an alias name as the first user argument and rewrites the docker run command to `bash -c '<value> "$@"' <name> <args>` — same expansion semantics as the interactive case, with trailing args forwarded through `$@`.
 
 ### Reaching host services

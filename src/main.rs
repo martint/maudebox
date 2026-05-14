@@ -46,6 +46,8 @@ const EXAMPLES: &str = "Examples:
   maudebox --mount ~/.aws:~/.aws:ro      # bind ~/.aws read-only into the container
   maudebox mount add ~/.m2:~/.m2:overlay # persist a mount in the user config
   maudebox alias add cl 'claude --dangerously-skip-permissions --remote-control $MAUDEBOX_INSTANCE'
+  maudebox config edit                   # open the user config in $EDITOR
+  maudebox config path                   # print the user config path
 ";
 
 #[derive(Parser)]
@@ -122,6 +124,9 @@ enum Command {
     /// Manage the user config's aliases table.
     Alias(cmd::alias::AliasArgs),
 
+    /// Open or locate the user config file.
+    Config(cmd::config::ConfigArgs),
+
     /// (default) Launch a container. First positional is the project dir,
     /// the rest is the container command.
     #[command(external_subcommand)]
@@ -166,6 +171,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
         Some(Command::Keep { target }) => cmd::keep::run(&target),
         Some(Command::Mount(args)) => cmd::mount::run(args.action),
         Some(Command::Alias(args)) => cmd::alias::run(args.action),
+        Some(Command::Config(args)) => cmd::config::run(args.action),
         Some(Command::New(args)) => cmd::new::run(args, tag, mount, instance),
     }
 }
