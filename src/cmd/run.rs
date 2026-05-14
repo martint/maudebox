@@ -12,6 +12,10 @@ pub struct RunOptions {
     pub image: String,
     pub memory_from: String,
     pub extra_mounts: Vec<String>,
+    /// Discriminator appended to the project basename to form
+    /// `MAUDEBOX_INSTANCE` and the `maudebox.instance` label. Empty = no
+    /// suffix (just basename). See `--instance` on the CLI.
+    pub instance: String,
     pub ephemeral_name: String,
     pub project_dir: String,
     pub command: Vec<String>,
@@ -134,10 +138,19 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     }
 
     // ── labels (instance/project/ephemeral) ────────────────────────────────
-    let instance_name = project_dir
+    // Default instance handle is the project basename. `--instance review` on
+    // a `trino` project gives `trino-review` — two concurrent containers on
+    // the same project then have distinct $MAUDEBOX_INSTANCE values so an
+    // alias like `claude --remote-control $MAUDEBOX_INSTANCE` doesn't collide.
+    let basename = project_dir
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let instance_name = if opts.instance.is_empty() {
+        basename
+    } else {
+        format!("{basename}-{}", opts.instance)
+    };
     let mut label_strs: Vec<String> = vec![
         format!("maudebox.instance={instance_name}"),
         format!("maudebox.project={}", project_dir.display()),

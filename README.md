@@ -78,6 +78,17 @@ The host project directory is bind-mounted into the container at its **original 
 
 The same basename is also exposed as `$MAUDEBOX_INSTANCE`, which is convenient as a stable handle for the running container — e.g. `claude --remote-control "$MAUDEBOX_INSTANCE"`.
 
+#### Two concurrent containers on the same repo
+
+If you want a second session on the same project — typical case: one for coding, one for review — pass `--instance NAME` to discriminate it:
+
+```sh
+maudebox . claude                         # MAUDEBOX_INSTANCE=trino
+maudebox --instance review . claude       # MAUDEBOX_INSTANCE=trino-review
+```
+
+The flag is appended to the project basename, not a full override, so the basename stays a stable prefix. The discriminator also threads into the `maudebox.instance` container label, so the two sessions appear as distinct handles to `claude --remote-control` and other tools that key off `$MAUDEBOX_INSTANCE`. Overlay volumes and the per-instance state dir are still keyed only on the project path, so both sessions share Maven cache state — if that's not what you want, use `maudebox new` to spin up a second worktree instead.
+
 If the project is a **jj workspace** or **git worktree**, `maudebox` reads its metadata (`.jj/repo` for jj, `.git` for git), finds the base repo, and bind-mounts it at its host path too — so the absolute paths recorded inside the worktree resolve correctly and `jj` / `git` commands Just Work.
 
 ### Extra bind mounts

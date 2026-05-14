@@ -33,6 +33,7 @@ const EXAMPLES: &str = "Examples:
   maudebox /path/to/myproject            # interactive shell, specific project
   maudebox . mvnd verify                 # run a build
   maudebox . claude                      # start Claude Code
+  maudebox --instance review . claude    # second session on same repo (distinct $MAUDEBOX_INSTANCE)
   maudebox new feature-x                 # new workspace from cwd (kept on exit)
   maudebox new feature-x /path/to/proj   # new workspace from a specific project
   maudebox new feature-x --from main     # start from a specific revision
@@ -75,6 +76,16 @@ struct Cli {
     /// be declared in $XDG_CONFIG_HOME/maudebox/config.toml.
     #[arg(long, value_name = "SPEC")]
     mount: Vec<String>,
+
+    /// Discriminator appended to $MAUDEBOX_INSTANCE and the container's
+    /// `maudebox.instance` label, e.g. `--instance review` on a `trino`
+    /// project yields `trino-review`. Use this to run two concurrent
+    /// containers on the same project (one for coding, one for review) so
+    /// aliases like `claude --remote-control $MAUDEBOX_INSTANCE` don't
+    /// collide. Overlay volumes and state dirs are still keyed only on the
+    /// project path, so the two sessions share Maven cache state.
+    #[arg(long, value_name = "NAME")]
+    instance: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -138,22 +149,23 @@ fn dispatch(cli: Cli) -> Result<i32> {
         tag,
         memory_from,
         mount,
+        instance,
         command,
     } = cli;
     match command {
-        None => default_run(tag, memory_from, mount, ".".to_string(), Vec::new()),
+        None => default_run(tag, memory_from, mount, instance, ".".to_string(), Vec::new()),
         Some(Command::Default(args)) => {
             let mut it = args.into_iter();
             let project_dir = it.next().unwrap_or_else(|| ".".to_string());
             let inner: Vec<String> = it.collect();
-            default_run(tag, memory_from, mount, project_dir, inner)
+            default_run(tag, memory_from, mount, instance, project_dir, inner)
         }
         Some(Command::List) => cmd::list::run(),
         Some(Command::Rm { target }) => cmd::rm::run(&target),
         Some(Command::Keep { target }) => cmd::keep::run(&target),
         Some(Command::Mount(args)) => cmd::mount::run(args.action),
         Some(Command::Alias(args)) => cmd::alias::run(args.action),
-        Some(Command::New(args)) => cmd::new::run(args, tag, mount),
+        Some(Command::New(args)) => cmd::new::run(args, tag, mount, instance),
     }
 }
 
@@ -161,6 +173,7 @@ fn default_run(
     image: String,
     memory_from: Option<String>,
     extra_mounts: Vec<String>,
+    instance: Option<String>,
     project_dir: String,
     command: Vec<String>,
 ) -> Result<i32> {
@@ -168,6 +181,7 @@ fn default_run(
         image,
         memory_from: memory_from.unwrap_or_default(),
         extra_mounts,
+        instance: instance.unwrap_or_default(),
         ephemeral_name: String::new(),
         project_dir,
         command,

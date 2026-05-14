@@ -36,7 +36,12 @@ pub struct NewArgs {
 // exits, like `maudebox <path>` does. With --ephemeral, the workspace and
 // its overlay volume are torn down on exit. jj is preferred when both .jj
 // and .git are present (colocated repos).
-pub fn run(args: NewArgs, image: String, extra_mounts: Vec<String>) -> Result<i32> {
+pub fn run(
+    args: NewArgs,
+    image: String,
+    extra_mounts: Vec<String>,
+    instance: Option<String>,
+) -> Result<i32> {
     let NewArgs {
         name,
         path: target_opt,
@@ -134,6 +139,7 @@ pub fn run(args: NewArgs, image: String, extra_mounts: Vec<String>) -> Result<i3
         image,
         memory_from: source.display().to_string(),
         extra_mounts,
+        instance: instance.unwrap_or_default(),
         ephemeral_name: if ephemeral { name.clone() } else { String::new() },
         project_dir: target.display().to_string(),
         command: inner_cmd,
