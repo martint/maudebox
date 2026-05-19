@@ -96,7 +96,10 @@ pub fn run(
             jj_args.push(from_rev.clone());
         }
         jj_args.push(target.display().to_string());
-        run_in(&source, "jj", &jj_args)?;
+        if let Err(e) = run_in(&source, "jj", &jj_args) {
+            cleanup_failed_jj(&source, &name, &target);
+            return Err(e);
+        }
     } else if source.join(".git").exists() {
         kind = WorkspaceKind::Git;
         let rev: &str = if from_rev.is_empty() { "HEAD" } else { from_rev.as_str() };
@@ -104,7 +107,7 @@ pub fn run(
             "Creating git worktree '{name}' at: {} (branch: {name} from {rev})",
             target.display()
         );
-        run_in(
+        if let Err(e) = run_in(
             &source,
             "git",
             &[
@@ -115,7 +118,10 @@ pub fn run(
                 target.display().to_string(),
                 rev.to_string(),
             ],
-        )?;
+        ) {
+            cleanup_failed_git(&source, &target);
+            return Err(e);
+        }
     } else {
         eprintln!("Not a jj or git repo: {}", source.display());
         return Ok(1);
@@ -174,6 +180,33 @@ fn ephemeral_cleanup(target: &Path) -> Result<()> {
     // and shared with the host-side `maudebox rm` command.
     let _ = rm::run(&target.display().to_string());
     Ok(())
+}
+
+fn cleanup_failed_jj(source: &Path, name: &str, target: &Path) {
+    let forgot = Command::new("jj")
+        .args(["workspace", "forget", name])
+        .current_dir(source)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    let removed = std::fs::remove_dir_all(target).is_ok();
+    if forgot || removed {
+        eprintln!("Cleaned up partial workspace at: {}", target.display());
+    }
+}
+
+fn cleanup_failed_git(source: &Path, target: &Path) {
+    let removed_via_git = Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(target)
+        .current_dir(source)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    let removed_dir = std::fs::remove_dir_all(target).is_ok();
+    if removed_via_git || removed_dir {
+        eprintln!("Cleaned up partial worktree at: {}", target.display());
+    }
 }
 
 fn run_in(cwd: &Path, cmd: &str, args: &[String]) -> Result<()> {
