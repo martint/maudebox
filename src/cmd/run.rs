@@ -1,4 +1,4 @@
-use crate::config::{read_aliases, read_mcp_servers, read_mounts};
+use crate::config::{read_aliases, read_default_command, read_mcp_servers, read_mounts};
 use crate::docker;
 use crate::mount::{build_mount_plan, MountPlan};
 use crate::paths::{canonicalize, home, xdg_state_home, STATE_VOLUME};
@@ -29,7 +29,14 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         return Ok(1);
     }
 
-    let command = resolve_alias(opts.command)?;
+    // Fall back to the configured default command when the user gave none,
+    // so a plain `maudebox` / `maudebox new` launches it instead of a shell.
+    let command = if opts.command.is_empty() {
+        read_default_command()?
+    } else {
+        opts.command
+    };
+    let command = resolve_alias(command)?;
     let vcs_base = detect_vcs_base(&project_dir);
 
     // ── persistent state (maudebox-state volume + read-only host overlays) ──

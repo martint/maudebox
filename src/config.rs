@@ -103,6 +103,29 @@ pub fn read_aliases() -> Result<Vec<(String, String)>> {
     Ok(out)
 }
 
+// The container command launched when none is given on the CLI — applies
+// to plain `maudebox` and `maudebox new` alike. An array so a multi-word
+// command needs no shell-splitting; empty (the default) leaves the image's
+// own CMD, an interactive shell, in place.
+pub fn read_default_command() -> Result<Vec<String>> {
+    let path = config_path()?;
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).context(format!("reading {}", path.display())),
+    };
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let arr = match v.get("default-command").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return Ok(Vec::new()),
+    };
+    Ok(arr
+        .iter()
+        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+        .collect())
+}
+
 fn emit_mounts_block(specs: &[String]) -> String {
     if specs.is_empty() {
         return "mounts = []\n".to_string();

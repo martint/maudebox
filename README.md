@@ -165,6 +165,22 @@ maudebox alias rm cl
 
 Single-quote VALUE on the host so `$MAUDEBOX_INSTANCE` (and any other `$VAR` references) stay literal in the alias definition — they expand each time the alias is invoked, picking up the actual container env. `add` updates the value if the name already exists; `rm` removes by name. Only the `[aliases]` table is rewritten on mutation; the rest of `the user config` is preserved.
 
+### Default command
+
+Running `maudebox` or `maudebox new` with no command opens an interactive shell. To launch something else by default — typically Claude Code — set `default-command` in the user config:
+
+```toml
+default-command = ["claude"]
+```
+
+It's an array, so a command with arguments needs no shell quoting:
+
+```toml
+default-command = ["claude", "--dangerously-skip-permissions"]
+```
+
+An explicit command on the CLI always takes precedence, so `maudebox . bash` still drops you in a shell. The default applies wherever a command is otherwise absent — plain `maudebox`, `maudebox <name>`, and `maudebox new <name>`.
+
 ### Editing the user config directly
 
 For anything the `mount` / `alias` subcommands don't cover (e.g. `[mcp.*]` tables), open the file in your editor:
