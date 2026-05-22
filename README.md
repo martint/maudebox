@@ -10,7 +10,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 - `git` and [`jj`](https://github.com/jj-vcs/jj) (Jujutsu VCS)
 - Claude Code CLI
 - GitHub CLI (`gh`)
-- `ripgrep`, `vim`, `less`, `sudo`
+- `ripgrep`, `vim`, `less`, `sudo`, OpenSSH client (`ssh`, `ssh-keygen`, `scp`)
 
 Builds natively on amd64 and arm64.
 

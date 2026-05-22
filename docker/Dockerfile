@@ -72,6 +72,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gh \
         git \
         less \
+        openssh-client \
         python-is-python3 \
         python3 \
         python3-dev \
