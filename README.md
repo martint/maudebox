@@ -91,6 +91,22 @@ The flag is appended to the project basename, not a full override, so the basena
 
 If the project is a **jj workspace** or **git worktree**, `maudebox` reads its metadata (`.jj/repo` for jj, `.git` for git), finds the base repo, and bind-mounts it at its host path too — so the absolute paths recorded inside the worktree resolve correctly and `jj` / `git` commands Just Work.
 
+#### Referring to projects by name
+
+`maudebox <name>` accepts a bare name in place of a path. The name is resolved in two steps:
+
+1. **Workspaces created by `maudebox new`** — matched by the name passed to `new`, so a workspace can be re-entered without retyping its path (see [Reattaching to a non-ephemeral workspace](#reattaching-to-a-non-ephemeral-workspace)).
+2. **`project-roots`** — directories listed in the user config; the first `<root>/<name>` that exists on disk is used.
+
+```toml
+project-roots = [
+    "~/Projects",
+    "~/work",
+]
+```
+
+With `~/Projects/trino` on disk and `~/Projects` configured as a root, `maudebox trino` launches a container for it without typing the path. A name that resolves under more than one root — or matches more than one `new` workspace — is reported as ambiguous rather than guessed. Anything containing a `/`, or starting with `/`, `.`, or `~`, is always treated as a literal path and skips name resolution.
+
 ### Extra bind mounts
 
 By default `maudebox` only sets up the project tree and the Claude/gh state volumes. Any other host path you want exposed inside the container — `~/.m2`, `~/.aws`, a notes directory, a shared cache — is declared explicitly.

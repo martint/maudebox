@@ -1,4 +1,4 @@
-use crate::paths::config_path;
+use crate::paths::{config_path, expand_host_tilde};
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::ErrorKind;
@@ -25,6 +25,28 @@ pub fn read_mounts() -> Result<Vec<String>> {
         .iter()
         .filter_map(|x| x.as_str().map(|s| s.to_string()))
         .collect())
+}
+
+// Directories searched when a bare name is given instead of a path (to
+// `maudebox <name>` or `maudebox new --source <name>`). Each entry is
+// host-tilde-expanded so `~/Projects` resolves against the host home.
+pub fn read_project_roots() -> Result<Vec<String>> {
+    let path = config_path()?;
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).context(format!("reading {}", path.display())),
+    };
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let arr = match v.get("project-roots").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return Ok(Vec::new()),
+    };
+    arr.iter()
+        .filter_map(|x| x.as_str())
+        .map(expand_host_tilde)
+        .collect()
 }
 
 // MCP server definitions live in `[mcp.NAME]` tables and map 1:1 to the
