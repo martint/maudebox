@@ -223,9 +223,10 @@ Edits to the user config only take effect for **new** containers; an already-run
 The source project defaults to the current directory; `--source` points it elsewhere. Anything after `<name>` is the command to run inside the new workspace — with no positional source argument, there's no ambiguity between a source directory and the command.
 
 ```sh
-maudebox new feature-x                       # new workspace from cwd
+maudebox new feature-x                       # new workspace off the default branch
 maudebox new feature-x --source trino        # ...from another project (path or name)
 maudebox new feature-x --from main           # start from a specific revision
+maudebox new feature-x --fetch               # fetch first, then branch off the default
 maudebox new feature-x --path /tmp/scratch   # custom target path
 maudebox new feature-x --ephemeral           # tear down workspace + overlay on exit
 maudebox new feature-x claude                # spawn the workspace, run a command in it
@@ -235,7 +236,7 @@ Defaults:
 
 - **Source project:** the current directory. Override with `--source PATH-OR-NAME` — a path, or a bare name resolved like `maudebox <name>` (see [Referring to projects by name](#referring-to-projects-by-name)).
 - **Target path:** `<project>/../<basename>.<name>` (sibling of the source project). Override with `--path PATH`.
-- **Starting revision:** jj's `@-` for jj, `HEAD` for git. Override with `--from REV`. For git, a new branch named `<name>` is created at that revision.
+- **Starting revision:** the project's **default branch** — jj's `trunk()`, or the branch `origin/HEAD` points at for git. `main` vs `master` is detected per repo (from `origin/HEAD`, falling back to probing `origin/main` / `origin/master`), never assumed. Override with `--from REV`; `--from @-` (jj) or `--from HEAD` (git) branches from the source's current checkout instead. For git, a new branch named `<name>` is created at that revision. Add `--fetch` to refresh remote-tracking refs first, so the workspace starts from current upstream rather than the last fetch.
 - **VCS choice:** jj is preferred when both `.jj/` and `.git` are present (colocated repos).
 
 #### Reattaching to a non-ephemeral workspace

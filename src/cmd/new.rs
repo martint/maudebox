@@ -2,6 +2,7 @@ use crate::cmd::run::{run as run_cmd, RunOptions};
 use crate::cmd::rm;
 use crate::manifest::{self, Manifest, WorkspaceKind};
 use crate::resolve::resolve_project;
+use crate::vcs;
 use crate::volume::compute_state_dir;
 use anyhow::{bail, Context, Result};
 use clap::Args;
@@ -23,9 +24,16 @@ pub struct NewArgs {
     #[arg(long, value_name = "PATH")]
     pub path: Option<String>,
 
-    /// Starting revision (default: jj @-, git HEAD).
+    /// Starting revision (default: the project's default branch — jj
+    /// `trunk()`, git `origin/HEAD`). Pass `--from @-` (jj) or `--from HEAD`
+    /// (git) to branch from the source's current checkout instead.
     #[arg(long, value_name = "REV")]
     pub from: Option<String>,
+
+    /// Refresh the source repo's remote-tracking refs (`git fetch` /
+    /// `jj git fetch`) before resolving the default branch.
+    #[arg(long)]
+    pub fetch: bool,
 
     /// Tear down workspace/worktree and overlay volume on container exit.
     #[arg(long)]
@@ -52,10 +60,10 @@ pub fn run(
         source: source_opt,
         path: target_opt,
         from: from_opt,
+        fetch,
         ephemeral,
         command: inner_cmd,
     } = args;
-    let from_rev = from_opt.unwrap_or_default();
 
     // The source project is named explicitly via --source (a path or a bare
     // name resolved like `maudebox <name>`); everything after <name> is the
@@ -89,40 +97,72 @@ pub fn run(
         return Ok(1);
     }
 
-    let kind: WorkspaceKind;
-    if source.join(".jj").exists() {
-        kind = WorkspaceKind::Jj;
-        println!("Creating jj workspace '{name}' at: {}", target.display());
-        let mut jj_args: Vec<String> =
-            vec!["workspace".into(), "add".into(), "--name".into(), name.clone()];
-        if !from_rev.is_empty() {
-            jj_args.push("-r".into());
-            jj_args.push(from_rev.clone());
-        }
-        jj_args.push(target.display().to_string());
-        run_in(&source, "jj", &jj_args)?;
+    // VCS kind drives both the optional fetch and the default-branch
+    // resolution below. jj wins for colocated repos (.jj + .git present).
+    let kind = if source.join(".jj").exists() {
+        WorkspaceKind::Jj
     } else if source.join(".git").exists() {
-        kind = WorkspaceKind::Git;
-        let rev: &str = if from_rev.is_empty() { "HEAD" } else { from_rev.as_str() };
-        println!(
-            "Creating git worktree '{name}' at: {} (branch: {name} from {rev})",
-            target.display()
-        );
-        run_in(
-            &source,
-            "git",
-            &[
-                "worktree".into(),
-                "add".into(),
-                "-b".into(),
-                name.clone(),
-                target.display().to_string(),
-                rev.to_string(),
-            ],
-        )?;
+        WorkspaceKind::Git
     } else {
         eprintln!("Not a jj or git repo: {}", source.display());
         return Ok(1);
+    };
+
+    // --fetch refreshes the source repo's remote-tracking refs first, so the
+    // workspace starts from current upstream rather than the last fetch.
+    if fetch {
+        match kind {
+            WorkspaceKind::Jj => run_in(&source, "jj", &["git".into(), "fetch".into()])?,
+            WorkspaceKind::Git => run_in(
+                &source,
+                "git",
+                &["fetch".into(), "--quiet".into(), "origin".into()],
+            )?,
+        }
+    }
+
+    // Starting revision: an explicit --from, else the project's default
+    // branch (jj `trunk()` / git `origin/HEAD`).
+    let from_rev = match from_opt {
+        Some(r) if !r.is_empty() => r,
+        _ => vcs::default_branch(kind, &source)?,
+    };
+
+    match kind {
+        WorkspaceKind::Jj => {
+            println!("Creating jj workspace '{name}' at: {}", target.display());
+            run_in(
+                &source,
+                "jj",
+                &[
+                    "workspace".into(),
+                    "add".into(),
+                    "--name".into(),
+                    name.clone(),
+                    "-r".into(),
+                    from_rev.clone(),
+                    target.display().to_string(),
+                ],
+            )?;
+        }
+        WorkspaceKind::Git => {
+            println!(
+                "Creating git worktree '{name}' at: {} (branch: {name} from {from_rev})",
+                target.display()
+            );
+            run_in(
+                &source,
+                "git",
+                &[
+                    "worktree".into(),
+                    "add".into(),
+                    "-b".into(),
+                    name.clone(),
+                    target.display().to_string(),
+                    from_rev.clone(),
+                ],
+            )?;
+        }
     }
 
     // Persist the manifest in the state dir. Its presence is what lets `rm`

@@ -1,5 +1,8 @@
+use crate::manifest::WorkspaceKind;
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 // A jj workspace stores the absolute or relative path to the *main* repo's
 // .jj/repo directory inside <workspace>/.jj/repo (a regular file). A git
@@ -75,4 +78,81 @@ fn detect_git_base(dir: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(base))
+}
+
+/// The revision a new workspace branches from when `--from` is omitted: the
+/// project's default branch.
+///
+/// jj: the built-in `trunk()` revset — it resolves `main@origin` /
+/// `master@origin` / … itself, so the main-vs-master distinction needs no
+/// special-casing here.
+///
+/// git: the branch `refs/remotes/origin/HEAD` points at, returned as the
+/// remote-tracking ref (`origin/<branch>`) so the workspace starts from
+/// upstream's tip rather than a possibly-stale local branch. That symref is
+/// per-repo, so `main` vs `master` is whatever the repo was cloned with.
+/// `git clone` writes it, but not every setup has it; when it's missing,
+/// `origin/main` and `origin/master` are probed and a unique hit is used.
+pub fn default_branch(kind: WorkspaceKind, repo: &Path) -> Result<String> {
+    match kind {
+        WorkspaceKind::Jj => Ok("trunk()".to_string()),
+        WorkspaceKind::Git => git_default_branch(repo),
+    }
+}
+
+fn git_default_branch(repo: &Path) -> Result<String> {
+    // origin/HEAD records the remote's default branch as of clone time.
+    if let Some(short) = git_capture(
+        repo,
+        &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    )? {
+        return Ok(short); // already in `origin/<branch>` form
+    }
+    // No symref — probe the usual names, and accept the result only when
+    // exactly one exists so we never silently pick the wrong default.
+    let found: Vec<&str> = ["main", "master"]
+        .into_iter()
+        .filter(|b| {
+            let r = format!("refs/remotes/origin/{b}");
+            git_ok(repo, &["show-ref", "--verify", "--quiet", &r])
+        })
+        .collect();
+    match found.as_slice() {
+        [b] => Ok(format!("origin/{b}")),
+        _ => bail!(
+            "could not determine the default branch of {} (no origin/HEAD). \
+             Pass --from explicitly, or run `git remote set-head origin --auto`.",
+            repo.display()
+        ),
+    }
+}
+
+// `git -C <repo> <args>`: trimmed stdout when it succeeds with output, else
+// None (a failed command or empty output).
+fn git_capture(repo: &Path, args: &[&str]) -> Result<Option<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stderr(Stdio::null())
+        .output()
+        .context("spawning git")?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok(if s.is_empty() { None } else { Some(s) })
+}
+
+// `git -C <repo> <args>`: true when the command exits 0.
+fn git_ok(repo: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
