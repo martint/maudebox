@@ -93,7 +93,7 @@ If the project is a **jj workspace** or **git worktree**, `maudebox` reads its m
 
 #### Referring to projects by name
 
-`maudebox <name>` accepts a bare name in place of a path. The name is resolved in two steps:
+`maudebox <name>` and `maudebox new --source <name>` accept a bare name in place of a path. The name is resolved in two steps:
 
 1. **Workspaces created by `maudebox new`** — matched by the name passed to `new`, so a workspace can be re-entered without retyping its path (see [Reattaching to a non-ephemeral workspace](#reattaching-to-a-non-ephemeral-workspace)).
 2. **`project-roots`** — directories listed in the user config; the first `<root>/<name>` that exists on disk is used.
@@ -220,16 +220,20 @@ Edits to the user config only take effect for **new** containers; an already-run
 
 `maudebox new <name>` creates a fresh jj workspace or git worktree off an existing project and launches `maudebox` on it. By default the workspace persists after the container exits, just like running `maudebox <path>` would — `new` is essentially `mkdir-and-enter`. Pass `--ephemeral` for short-lived scratch workspaces that should be torn down on exit.
 
+The source project defaults to the current directory; `--source` points it elsewhere. Anything after `<name>` is the command to run inside the new workspace — with no positional source argument, there's no ambiguity between a source directory and the command.
+
 ```sh
 maudebox new feature-x                       # new workspace from cwd
-maudebox new feature-x /path/to/project      # new workspace off a specific project
+maudebox new feature-x --source trino        # ...from another project (path or name)
 maudebox new feature-x --from main           # start from a specific revision
 maudebox new feature-x --path /tmp/scratch   # custom target path
 maudebox new feature-x --ephemeral           # tear down workspace + overlay on exit
+maudebox new feature-x claude                # spawn the workspace, run a command in it
 ```
 
 Defaults:
 
+- **Source project:** the current directory. Override with `--source PATH-OR-NAME` — a path, or a bare name resolved like `maudebox <name>` (see [Referring to projects by name](#referring-to-projects-by-name)).
 - **Target path:** `<project>/../<basename>.<name>` (sibling of the source project). Override with `--path PATH`.
 - **Starting revision:** jj's `@-` for jj, `HEAD` for git. Override with `--from REV`. For git, a new branch named `<name>` is created at that revision.
 - **VCS choice:** jj is preferred when both `.jj/` and `.git` are present (colocated repos).

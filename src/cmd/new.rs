@@ -1,6 +1,7 @@
 use crate::cmd::run::{run as run_cmd, RunOptions};
 use crate::cmd::rm;
 use crate::manifest::{self, Manifest, WorkspaceKind};
+use crate::resolve::resolve_project;
 use crate::volume::compute_state_dir;
 use anyhow::{bail, Context, Result};
 use clap::Args;
@@ -11,6 +12,12 @@ use std::process::Command;
 pub struct NewArgs {
     /// New workspace/worktree name.
     pub name: String,
+
+    /// Source project to branch from: a path, or a bare name resolved the
+    /// same way as `maudebox <name>` — through the manifest store and the
+    /// configured `project-roots` (default: current directory).
+    #[arg(long, value_name = "PATH-OR-NAME")]
+    pub source: Option<String>,
 
     /// Target path (default: <source>/../<basename>.<name>).
     #[arg(long, value_name = "PATH")]
@@ -24,11 +31,9 @@ pub struct NewArgs {
     #[arg(long)]
     pub ephemeral: bool,
 
-    /// [source-dir] [command...] — source-dir defaults to cwd; if the first
-    /// positional after `name` is a directory it's treated as the source,
-    /// otherwise everything is the container command.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "REST")]
-    pub rest: Vec<String>,
+    /// Command to run inside the new workspace (default: interactive shell).
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "COMMAND")]
+    pub command: Vec<String>,
 }
 
 // Create a jj workspace or git worktree from a source project and run
@@ -44,22 +49,21 @@ pub fn run(
 ) -> Result<i32> {
     let NewArgs {
         name,
+        source: source_opt,
         path: target_opt,
         from: from_opt,
         ephemeral,
-        rest,
+        command: inner_cmd,
     } = args;
     let from_rev = from_opt.unwrap_or_default();
 
-    // Positional shape after <name>:
-    //   <source-dir> <command...>   if rest[0] exists as a directory
-    //   <command...>                otherwise (source defaults to cwd)
-    let (source_str, inner_cmd): (String, Vec<String>) = match rest.first() {
-        Some(first) if Path::new(first).is_dir() => (first.clone(), rest[1..].to_vec()),
-        Some(_) => (".".to_string(), rest),
-        None => (".".to_string(), Vec::new()),
+    // The source project is named explicitly via --source (a path or a bare
+    // name resolved like `maudebox <name>`); everything after <name> is the
+    // container command, with no positional source to disambiguate from it.
+    let source_str = match source_opt.as_deref() {
+        None | Some("") => ".".to_string(),
+        Some(s) => resolve_project(s)?,
     };
-
     let source = std::fs::canonicalize(&source_str)
         .with_context(|| format!("resolving source: {source_str}"))?;
     if !source.is_dir() {

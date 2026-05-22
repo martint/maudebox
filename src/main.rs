@@ -36,7 +36,7 @@ const EXAMPLES: &str = "Examples:
   maudebox . claude                      # start Claude Code
   maudebox --instance review . claude    # second session on same repo (distinct $MAUDEBOX_INSTANCE)
   maudebox new feature-x                 # new workspace from cwd (kept on exit)
-  maudebox new feature-x /path/to/proj   # new workspace from a specific project
+  maudebox new feature-x --source trino  # new workspace from another project
   maudebox new feature-x --from main     # start from a specific revision
   maudebox new feature-x --ephemeral     # tear down workspace/overlay on exit
   maudebox new feature-x mvnd verify     # spawn workspace, run a build in it
