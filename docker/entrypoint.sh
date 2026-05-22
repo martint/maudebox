@@ -10,7 +10,8 @@
 #   --cap-add SYS_ADMIN  (or --privileged)
 #   --mount type=volume,src=maudebox-state,dst=/root/.claude,volume-subpath=claude
 #   --mount type=volume,src=maudebox-state,dst=/root/.config/gh,volume-subpath=gh
-#       (both optional; together they persist Claude + gh login)
+#   --mount type=volume,src=maudebox-state,dst=/root/.ssh,volume-subpath=ssh
+#       (all optional; together they persist Claude + gh login and SSH keys)
 #   -v <project>:<project>          (bind-mount at the host path)
 #   HOST_PROJECT_DIR=<project>      (env var; entrypoint adds a /root/<basename> symlink and cd's there)
 #   HOST_UID, HOST_GID              (env vars; if set, drop privileges to those
@@ -69,6 +70,16 @@ if [ -d "$CLAUDE_DIR" ]; then
     fi
 fi
 
+# ── SSH dir permissions ───────────────────────────────────────────────────────
+# ~/.ssh is a maudebox-state subpath shared across all containers (keys
+# generated or added inside one container are reused by the next). Docker
+# creates the subpath dir mode 0755; OpenSSH wants 0700 — and refuses keys
+# under StrictModes if the dir is group/world-writable. Tighten it on every
+# launch while still root: cheap and idempotent.
+if [ -d "$HOME_DIR/.ssh" ]; then
+    chmod 700 "$HOME_DIR/.ssh"
+fi
+
 # ── /root/<basename> convenience symlink + initial cwd ───────────────────────
 # The project (and any jj/git base repo) is bind-mounted at its host path so
 # absolute paths in worktree/workspace metadata resolve. Also expose it as
@@ -125,7 +136,7 @@ if [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ] && [ "$HOST_UID" != "0" ]; t
     # glob covers any per-overlay upper-layer volumes mounted by the wrapper;
     # nullglob keeps it harmless when no overlays are active.
     shopt -s nullglob
-    for d in /maudebox/overlay-*/upper /root/.claude /root/.config/gh /root; do
+    for d in /maudebox/overlay-*/upper /root/.claude /root/.config/gh /root/.ssh /root; do
         [ -e "$d" ] || continue
         find "$d" -xdev \! -uid "$HOST_UID" \
             -exec chown -h "${HOST_UID}:${HOST_GID}" {} + 2>/dev/null || true

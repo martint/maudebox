@@ -106,18 +106,21 @@ For VCS info: it tries jj first (`jj workspace root` → if inside, look up chan
 - `~/.config/git/` (the whole dir, e.g. `ignore`, `attributes`)
 - `~/.config/jj/config.toml` only — **not** the whole `~/.config/jj/` dir, because `repos/` underneath is jj's per-repo state cache keyed by host paths.
 
-Auth and signing material (`~/.ssh/`, `~/.git-credentials`, `~/.gnupg/`) is intentionally not mounted.
+Auth and signing material (`~/.ssh/`, `~/.git-credentials`, `~/.gnupg/`) is intentionally not mounted. The container does have a `~/.ssh`, but it's a maudebox-managed state-volume subtree (see "Persistent state" below) that starts empty and is never populated from the host — not a mount of the host's `~/.ssh`.
 
 The host's `commit.gpgsign = true` paired with 1Password's macOS-only ssh-sign program would auto-fail every container commit. The Dockerfile sets `GIT_CONFIG_COUNT/KEY/VALUE` env vars to force `commit.gpgsign=false` and `tag.gpgSign=false` at runtime; these override mounted user config (same precedence as `git -c`).
 
-### Persistent state (Claude + gh)
+### Persistent state (Claude + gh + ssh)
 
-`maudebox` shares a single named volume `maudebox-state` across all containers/worktrees. The volume hosts two isolated subtrees, each mounted at the canonical path the tool expects via Docker's `volume-subpath`:
+`maudebox` shares a single named volume `maudebox-state` across all containers/worktrees. The volume hosts three isolated subtrees, each mounted at the canonical path the tool expects via Docker's `volume-subpath`:
 
 - `claude/` → `/root/.claude` (Claude login, plugin caches)
 - `gh/`     → `/root/.config/gh` (gh auth, config)
+- `ssh/`    → `/root/.ssh` (SSH keys, `known_hosts`)
 
-The two trees never mix on disk despite living in the same volume. `volume-subpath` mounts fail if the subdir doesn't exist, so the wrapper runs a throwaway `mkdir -p /v/claude /v/gh` container before each launch (idempotent, ~50ms). Requires Docker 25+ (subpath mounts).
+The three trees never mix on disk despite living in the same volume. `volume-subpath` mounts fail if the subdir doesn't exist, so the wrapper runs a throwaway `mkdir -p /v/claude /v/gh /v/ssh` container before each launch (idempotent, ~50ms). Requires Docker 25+ (subpath mounts).
+
+The `ssh/` subtree gives every container a shared, container-only `~/.ssh`: a key generated (or added) inside one container is reused by all the others, while the host's `~/.ssh` stays unmounted and untouched. Docker creates the `volume-subpath` directory mode 0755, but OpenSSH wants `~/.ssh` at 0700 (and refuses keys under StrictModes otherwise), so the entrypoint `chmod 700`s it on every launch while still root. On Linux the entrypoint also `chown`s the `ssh/` subtree to `HOST_UID` alongside `claude/` and `gh/` so the dropped-privilege user can write keys.
 
 On top of the `claude/` subtree, specific files from the host's `~/.claude/` (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) are bind-mounted read-only — picking up the user's global Claude config without dragging in host-path-keyed state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`).
 

@@ -34,13 +34,18 @@ pub fn run(opts: RunOptions) -> Result<i32> {
 
     // ── persistent state (maudebox-state volume + read-only host overlays) ──
     docker::ensure_volume(STATE_VOLUME, &[])?;
-    docker::ensure_subpaths(&opts.image, STATE_VOLUME, &["claude", "gh"])?;
+    docker::ensure_subpaths(&opts.image, STATE_VOLUME, &["claude", "gh", "ssh"])?;
 
     let mut claude_mounts: Vec<String> = vec![
         "--mount".into(),
         format!("type=volume,src={STATE_VOLUME},dst=/root/.claude,volume-subpath=claude"),
         "--mount".into(),
         format!("type=volume,src={STATE_VOLUME},dst=/root/.config/gh,volume-subpath=gh"),
+        // A container-only ~/.ssh shared across all maudebox instances — keys
+        // generated/added inside one container are reused by the next. The
+        // host's ~/.ssh is deliberately never mounted; this is separate.
+        "--mount".into(),
+        format!("type=volume,src={STATE_VOLUME},dst=/root/.ssh,volume-subpath=ssh"),
     ];
     let host_claude_dir = home()?.join(".claude");
     for p in ["CLAUDE.md", "settings.json", "agents", "commands", "plugins"] {

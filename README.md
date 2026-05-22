@@ -22,7 +22,7 @@ Running Claude Code directly on your host gives it the same access you have: you
 
 `maudebox` runs Claude inside a container that can only see **the project directory you point it at** (and, for jj workspaces and git worktrees, the base repo it depends on). Everything else — `~/.ssh`, `~/.aws`, sibling projects, your shell config, your browser profile — is simply not mounted and not reachable. The container has no host network privileges beyond what Docker grants, no access to your host's package managers, and no way to install daemons on your machine. Claude can run `mvnd verify`, edit files in the project, run tests, and `jj` / `git` commands against that worktree, but it cannot wander out of it.
 
-Auth material is held back deliberately: `~/.ssh`, `~/.git-credentials`, and `~/.gnupg` are **not** mounted, and `commit.gpgsign` / `tag.gpgSign` are forced off inside the container so a host signing config (e.g. 1Password's macOS-only ssh-sign) doesn't either auto-fail every commit or — worse — get exercised against keys the container shouldn't be able to use.
+Auth material is held back deliberately: `~/.ssh`, `~/.git-credentials`, and `~/.gnupg` are **not** mounted, and `commit.gpgsign` / `tag.gpgSign` are forced off inside the container so a host signing config (e.g. 1Password's macOS-only ssh-sign) doesn't either auto-fail every commit or — worse — get exercised against keys the container shouldn't be able to use. The container does get its own separate `~/.ssh`, persisted across maudebox instances but starting empty and never populated from the host — see [Login state and global config](#login-state-and-global-config).
 
 ### No-conflict snapshot publishing across worktrees
 
@@ -32,7 +32,7 @@ Maven's local repository (`~/.m2/repository`) is a shared mutable store. When tw
 
 ### Shared logins and global config
 
-As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) is bind-mounted read-only, and login state for Claude and the GitHub CLI is kept in a shared persistent Docker volume. Log in once to each inside any container; every future container for any worktree is already logged in.
+As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) is bind-mounted read-only, and login state for Claude and the GitHub CLI — plus any SSH keys you generate inside a container — is kept in a shared persistent Docker volume. Log in once to each inside any container; every future container for any worktree is already logged in.
 
 ## Prerequisites
 
@@ -277,10 +277,13 @@ maudebox-overlay-<basename>-<8-char-hash>
 
 ### Login state and global config
 
-A shared Docker volume `maudebox-state` holds writable state across containers, with two isolated subtrees mounted at the canonical paths each tool expects:
+A shared Docker volume `maudebox-state` holds writable state across containers, with three isolated subtrees mounted at the canonical paths each tool expects:
 
 - `claude/` → `/root/.claude` (Claude login, plugin caches)
 - `gh/` → `/root/.config/gh` (`gh auth` token, config)
+- `ssh/` → `/root/.ssh` (SSH keys, `known_hosts`)
+
+The `ssh/` subtree is a **container-only** `~/.ssh`, distinct from the host's (which is never mounted). It starts empty; generate a key inside any container with `ssh-keygen` — or add one however you like — and every future container, for any worktree, reuses it. The entrypoint resets the directory to mode `0700` on each launch so OpenSSH accepts it.
 
 On top of the `claude/` subtree, the following items from the host's `~/.claude/` are bind-mounted read-only (only those that actually exist on the host):
 
@@ -312,7 +315,7 @@ Because of the Linux privilege drop, in-container privileged operations (`apt-ge
 
 ```sh
 maudebox rm /path/to/project        # tear down an instance (workspace if maudebox created it, plus volumes + state dir)
-docker volume rm maudebox-state     # forget persistent Claude + gh logins
+docker volume rm maudebox-state     # forget persistent Claude + gh logins and SSH keys
 docker rmi maudebox                 # remove the image
 ```
 
