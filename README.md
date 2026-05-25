@@ -76,7 +76,7 @@ Run `maudebox --help` for the full option list.
 
 The host project directory is bind-mounted into the container at its **original host path** (e.g. `/Users/martin/projects/trino/workspaces/trino.lateral`). The entrypoint also creates a `/root/<basename>` symlink to that path and starts the shell there, so `$PWD` shows a short, friendly path while the underlying filesystem is still the host-path bind-mount.
 
-The same basename is also exposed as `$MAUDEBOX_INSTANCE`, which is convenient as a stable handle for the running container — e.g. `claude --remote-control "$MAUDEBOX_INSTANCE"`.
+The same basename is also exposed as `$MAUDEBOX_INSTANCE` inside the container and used as the **docker container name** — so `docker ps` lists it directly and `docker exec trino bash` works without copy-pasting a container ID. Aliases like `claude --remote-control "$MAUDEBOX_INSTANCE"` use the same handle.
 
 #### Two concurrent containers on the same repo
 
@@ -87,7 +87,7 @@ maudebox . claude                         # MAUDEBOX_INSTANCE=trino
 maudebox --instance review . claude       # MAUDEBOX_INSTANCE=trino-review
 ```
 
-The flag is appended to the project basename, not a full override, so the basename stays a stable prefix. The discriminator also threads into the `maudebox.instance` container label, so the two sessions appear as distinct handles to `claude --remote-control` and other tools that key off `$MAUDEBOX_INSTANCE`. Overlay volumes and the per-instance state dir are still keyed only on the project path, so both sessions share Maven cache state — if that's not what you want, use `maudebox new` to spin up a second worktree instead.
+The flag is appended to the project basename, not a full override, so the basename stays a stable prefix. The discriminator also threads into the docker container name and the `maudebox.instance` label, so the two sessions appear as distinct handles to `claude --remote-control` and other tools that key off `$MAUDEBOX_INSTANCE`. Overlay volumes and the per-instance state dir are still keyed only on the project path, so both sessions share Maven cache state — if that's not what you want, use `maudebox new` to spin up a second worktree instead.
 
 If the project is a **jj workspace** or **git worktree**, `maudebox` reads its metadata (`.jj/repo` for jj, `.git` for git), finds the base repo, and bind-mounts it at its host path too — so the absolute paths recorded inside the worktree resolve correctly and `jj` / `git` commands Just Work.
 

@@ -253,10 +253,18 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     }
 
     // ── exec docker run ────────────────────────────────────────────────────
+    // `--name` makes `docker ps`/`exec`/`logs`/`stop` refer to the
+    // container by the same handle as `$MAUDEBOX_INSTANCE` and the
+    // `maudebox.instance` label, instead of a random `clever_curie`. A
+    // collision (two concurrent containers picking the same name) surfaces
+    // as a docker error; pass `--instance NAME` to discriminate, exactly
+    // as for `$MAUDEBOX_INSTANCE` collisions.
     let mut args: Vec<String> = vec![
         "run".into(),
         "--rm".into(),
         "-it".into(),
+        "--name".into(),
+        instance_name.clone(),
         "--cap-add".into(),
         "SYS_ADMIN".into(),
         "--security-opt".into(),
