@@ -6,6 +6,7 @@ ARG JJ_VERSION=0.41.0
 ARG RUST_VERSION=1.95.0
 ARG BUN_VERSION=1.3.13
 ARG PNPM_VERSION=11.1.0
+ARG CLAUDE_VERSION=2.1.144
 
 # The container starts as root for the privileged setup (overlay mount, volume
 # chowns) and on Linux drops to the host UID before exec'ing the user command —
@@ -123,7 +124,7 @@ RUN set -eux; \
 # real binary to /usr/local/bin so it lives outside any volume mount path,
 # then re-point the launcher symlink at it: the native binary records its
 # installMethod and warns at runtime if ~/.local/bin/claude is missing.
-RUN curl -fsSL https://claude.ai/install.sh | bash \
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLAUDE_VERSION" \
  && CLAUDE_LINK="$(ls "$HOME/.local/bin/claude" "$HOME/.claude/bin/claude" 2>/dev/null | head -1)" \
  && CLAUDE_BIN="$(readlink -f "$CLAUDE_LINK")" \
  && mv "$CLAUDE_BIN" /usr/local/bin/claude \

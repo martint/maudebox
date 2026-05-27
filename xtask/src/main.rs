@@ -15,6 +15,7 @@ const DEFAULT_JJ_VERSION: &str = "0.41.0";
 const DEFAULT_RUST_VERSION: &str = "1.95.0";
 const DEFAULT_BUN_VERSION: &str = "1.3.13";
 const DEFAULT_PNPM_VERSION: &str = "11.1.0";
+const DEFAULT_CLAUDE_VERSION: &str = "2.1.144";
 const DEFAULT_TAG: &str = "maudebox";
 
 const USAGE: &str = "\
@@ -26,12 +27,13 @@ Subcommands:
   help     Show this help.
 
 Options for `image` and `all`:
-  --mvnd-version VERSION   default: 1.0.5
-  --jj-version VERSION     default: 0.41.0
-  --rust-version VERSION   default: 1.95.0
-  --bun-version VERSION    default: 1.3.13
-  --pnpm-version VERSION   default: 11.1.0
-  --tag TAG                default: maudebox
+  --mvnd-version VERSION    default: 1.0.5
+  --jj-version VERSION      default: 0.41.0
+  --rust-version VERSION    default: 1.95.0
+  --bun-version VERSION     default: 1.3.13
+  --pnpm-version VERSION    default: 11.1.0
+  --claude-version VERSION  default: 2.1.144
+  --tag TAG                 default: maudebox
 ";
 
 fn main() -> ExitCode {
@@ -69,6 +71,7 @@ struct ImageOpts {
     rust_version: String,
     bun_version: String,
     pnpm_version: String,
+    claude_version: String,
     tag: String,
 }
 
@@ -79,6 +82,7 @@ fn parse_image_opts(args: &[String]) -> Result<ImageOpts, String> {
         rust_version: DEFAULT_RUST_VERSION.into(),
         bun_version: DEFAULT_BUN_VERSION.into(),
         pnpm_version: DEFAULT_PNPM_VERSION.into(),
+        claude_version: DEFAULT_CLAUDE_VERSION.into(),
         tag: DEFAULT_TAG.into(),
     };
     let mut i = 0;
@@ -109,6 +113,10 @@ fn parse_image_opts(args: &[String]) -> Result<ImageOpts, String> {
             }
             "--pnpm-version" => {
                 opts.pnpm_version = val()?;
+                i += 2;
+            }
+            "--claude-version" => {
+                opts.claude_version = val()?;
                 i += 2;
             }
             "--tag" => {
@@ -151,11 +159,12 @@ fn build_image(opts: &ImageOpts) -> Result<i32, String> {
         return Err(format!("missing build context: {}", context.display()));
     }
     println!("==> docker build -t {} {}", opts.tag, context.display());
-    println!("    mvnd : {}", opts.mvnd_version);
-    println!("    jj   : {}", opts.jj_version);
-    println!("    rust : {}", opts.rust_version);
-    println!("    bun  : {}", opts.bun_version);
-    println!("    pnpm : {}", opts.pnpm_version);
+    println!("    mvnd   : {}", opts.mvnd_version);
+    println!("    jj     : {}", opts.jj_version);
+    println!("    rust   : {}", opts.rust_version);
+    println!("    bun    : {}", opts.bun_version);
+    println!("    pnpm   : {}", opts.pnpm_version);
+    println!("    claude : {}", opts.claude_version);
     let status = Command::new("docker")
         .arg("build")
         .arg("--build-arg")
@@ -168,6 +177,8 @@ fn build_image(opts: &ImageOpts) -> Result<i32, String> {
         .arg(format!("BUN_VERSION={}", opts.bun_version))
         .arg("--build-arg")
         .arg(format!("PNPM_VERSION={}", opts.pnpm_version))
+        .arg("--build-arg")
+        .arg(format!("CLAUDE_VERSION={}", opts.claude_version))
         .arg("-t")
         .arg(&opts.tag)
         .arg(&context)

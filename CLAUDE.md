@@ -21,11 +21,11 @@ Build the wrapper binary (drops it at `target/release/maudebox`):
 cargo build --release
 ```
 
-Build the image (defaults: `mvnd 1.0.5`, `jj 0.41.0`, `bun 1.3.13`, `pnpm 11.1.0`, tag `maudebox`):
+Build the image (defaults: `mvnd 1.0.5`, `jj 0.41.0`, `bun 1.3.13`, `pnpm 11.1.0`, `claude 2.1.144`, tag `maudebox`):
 
 ```
 cargo xtask image
-cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --bun-version 1.3.13 --pnpm-version 11.1.0 --tag maudebox
+cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --bun-version 1.3.13 --pnpm-version 11.1.0 --claude-version 2.1.144 --tag maudebox
 ```
 
 Build everything (wrapper + image) in one go:
@@ -154,7 +154,7 @@ Bun and pnpm install global packages into the runtime user's HOME: bun's `bun in
 
 ### Claude Code install
 
-Claude Code is installed as the native binary via `curl … | bash` and moved into `/usr/local/bin/claude`. The installer drops a launcher symlink into `$HOME/.local/bin/claude` whose target lives in `$HOME/.local/share/claude/versions/<ver>`. The Dockerfile resolves the symlink with `readlink -f` and moves the real binary into `/usr/local/bin`, then removes `$HOME/.local/share/claude` and `$HOME/.claude` so the install dir doesn't bloat the image and `$HOME/.claude` is left empty for the runtime volume mount. After the move, `$HOME/.local/bin/claude` is recreated as a symlink to `/usr/local/bin/claude`: the native binary records its install path as `installMethod=native` (persisted into `~/.claude/state.json` on the named volume) and warns at startup if `~/.local/bin/claude` is missing.
+Claude Code is installed as the native binary via `curl … | bash -s -- "$CLAUDE_VERSION"` (the install script accepts a `stable | latest | X.Y.Z` positional) and moved into `/usr/local/bin/claude`. `CLAUDE_VERSION` is a Dockerfile `ARG`, defaulted in xtask and overridable with `--claude-version`, so version bumps go through the same pattern as mvnd/jj/rust/bun/pnpm rather than silently riding whatever the installer's current default happens to be at build time. The installer drops a launcher symlink into `$HOME/.local/bin/claude` whose target lives in `$HOME/.local/share/claude/versions/<ver>`. The Dockerfile resolves the symlink with `readlink -f` and moves the real binary into `/usr/local/bin`, then removes `$HOME/.local/share/claude` and `$HOME/.claude` so the install dir doesn't bloat the image and `$HOME/.claude` is left empty for the runtime volume mount. After the move, `$HOME/.local/bin/claude` is recreated as a symlink to `/usr/local/bin/claude`: the native binary records its install path as `installMethod=native` (persisted into `~/.claude/state.json` on the named volume) and warns at startup if `~/.local/bin/claude` is missing.
 
 ## Conventions for changes in this repo
 
