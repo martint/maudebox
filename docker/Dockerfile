@@ -6,7 +6,7 @@ ARG JJ_VERSION=0.41.0
 ARG RUST_VERSION=1.95.0
 ARG BUN_VERSION=1.3.13
 ARG PNPM_VERSION=11.1.0
-ARG CLAUDE_VERSION=2.1.144
+ARG CLAUDE_VERSION=2.1.158
 
 # The container starts as root for the privileged setup (overlay mount, volume
 # chowns) and on Linux drops to the host UID before exec'ing the user command —

@@ -54,7 +54,7 @@ cargo xtask all              # both, in one go
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --rust-version 1.95.0 --bun-version 1.3.13 --pnpm-version 11.1.0 --claude-version 2.1.144 --tag maudebox
+cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --rust-version 1.95.0 --bun-version 1.3.13 --pnpm-version 11.1.0 --claude-version 2.1.158 --tag maudebox
 ```
 
 ## Run
