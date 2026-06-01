@@ -1,4 +1,6 @@
-use crate::config::{read_aliases, read_default_command, read_mcp_servers, read_mounts};
+use crate::config::{
+    read_aliases, read_default_command, read_mcp_servers, read_mounts, read_network,
+};
 use crate::docker;
 use crate::mount::{build_mount_plan, MountPlan};
 use crate::paths::{canonicalize, home, xdg_state_home, STATE_VOLUME};
@@ -17,6 +19,10 @@ pub struct RunOptions {
     /// suffix (just basename). See `--instance` on the CLI.
     pub instance: String,
     pub ephemeral_name: String,
+    /// Docker networks to join at launch (`docker run --network`, one flag
+    /// each). Empty = fall back to the config-file `network` key, else
+    /// Docker's default bridge. See `--network` on the CLI.
+    pub network: Vec<String>,
     pub project_dir: String,
     pub command: Vec<String>,
 }
@@ -252,6 +258,27 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         println!("Overlay  : {} -> {}", o.host_src, o.container_dst);
     }
 
+    // ── network ────────────────────────────────────────────────────────────
+    // Join one or more user-defined Docker networks (e.g. a compose project's
+    // network) so containers can reach a service addressed by container name
+    // without publishing any port to the host. CLI `--network` wins over the
+    // config `network` key; unset leaves Docker's default bridge. Repeating
+    // `--network` on `docker run` requires Docker 23+ (maudebox already needs
+    // 25+). `host-gateway` (set below via --add-host) still resolves on
+    // user-defined networks.
+    let networks = if opts.network.is_empty() {
+        read_network()?
+    } else {
+        opts.network.clone()
+    };
+    let network_args: Vec<String> = networks
+        .iter()
+        .flat_map(|n| ["--network".to_string(), n.clone()])
+        .collect();
+    if !networks.is_empty() {
+        println!("Network  : {}", networks.join(", "));
+    }
+
     // ── exec docker run ────────────────────────────────────────────────────
     // `--name` makes `docker ps`/`exec`/`logs`/`stop` refer to the
     // container by the same handle as `$MAUDEBOX_INSTANCE` and the
@@ -276,6 +303,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         "-e".into(),
         format!("MAUDEBOX_INSTANCE={instance_name}"),
     ];
+    args.extend(network_args);
     args.extend(user_env);
     args.extend(term_env);
     args.extend(overlay_env);

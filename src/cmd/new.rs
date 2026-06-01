@@ -54,6 +54,7 @@ pub fn run(
     image: String,
     extra_mounts: Vec<String>,
     instance: Option<String>,
+    network: Vec<String>,
 ) -> Result<i32> {
     let NewArgs {
         name,
@@ -188,6 +189,7 @@ pub fn run(
         extra_mounts,
         instance: instance.unwrap_or_default(),
         ephemeral_name: if ephemeral { name.clone() } else { String::new() },
+        network,
         project_dir: target.display().to_string(),
         command: inner_cmd,
     });

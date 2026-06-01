@@ -126,6 +126,32 @@ pub fn read_default_command() -> Result<Vec<String>> {
         .collect())
 }
 
+/// Read the optional `network` key — one or more Docker network names that
+/// maudebox containers join at launch (`docker run --network`, repeatable).
+/// Lets containers reach a service running under its own compose project
+/// without publishing any port to the host: attach to the compose-created
+/// network and address the service by its compose service name. Accepts
+/// either a bare string (single network) or an array of strings (several,
+/// e.g. spanning two compose stacks). Returns an empty vec when unset.
+pub fn read_network() -> Result<Vec<String>> {
+    let path = config_path()?;
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).context(format!("reading {}", path.display())),
+    };
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(match v.get("network") {
+        Some(toml::Value::String(s)) => vec![s.clone()],
+        Some(toml::Value::Array(a)) => a
+            .iter()
+            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
 fn emit_mounts_block(specs: &[String]) -> String {
     if specs.is_empty() {
         return "mounts = []\n".to_string();

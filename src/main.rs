@@ -90,6 +90,17 @@ struct Cli {
     #[arg(long, value_name = "NAME")]
     instance: Option<String>,
 
+    /// Docker network for the container to join at launch (passed to
+    /// `docker run --network`). Repeatable to join several networks. Use
+    /// this to reach a service running under its own docker-compose project
+    /// without publishing any port to the host: attach to the compose-created
+    /// network (`<project>_default` by default) and address the service by
+    /// its compose service name. Can also be set via the `network` key in
+    /// $XDG_CONFIG_HOME/maudebox/config.toml (string or array); any
+    /// `--network` flag overrides the config key entirely.
+    #[arg(long, value_name = "NAME")]
+    network: Vec<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -156,16 +167,25 @@ fn dispatch(cli: Cli) -> Result<i32> {
         memory_from,
         mount,
         instance,
+        network,
         command,
     } = cli;
     match command {
-        None => default_run(tag, memory_from, mount, instance, ".".to_string(), Vec::new()),
+        None => default_run(
+            tag,
+            memory_from,
+            mount,
+            instance,
+            network,
+            ".".to_string(),
+            Vec::new(),
+        ),
         Some(Command::Default(args)) => {
             let mut it = args.into_iter();
             let first = it.next().unwrap_or_else(|| ".".to_string());
             let inner: Vec<String> = it.collect();
             let project_dir = resolve::resolve_project(&first)?;
-            default_run(tag, memory_from, mount, instance, project_dir, inner)
+            default_run(tag, memory_from, mount, instance, network, project_dir, inner)
         }
         Some(Command::List) => cmd::list::run(),
         Some(Command::Rm { target }) => cmd::rm::run(&target),
@@ -173,7 +193,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
         Some(Command::Mount(args)) => cmd::mount::run(args.action),
         Some(Command::Alias(args)) => cmd::alias::run(args.action),
         Some(Command::Config(args)) => cmd::config::run(args.action),
-        Some(Command::New(args)) => cmd::new::run(args, tag, mount, instance),
+        Some(Command::New(args)) => cmd::new::run(args, tag, mount, instance, network),
     }
 }
 
@@ -182,6 +202,7 @@ fn default_run(
     memory_from: Option<String>,
     extra_mounts: Vec<String>,
     instance: Option<String>,
+    network: Vec<String>,
     project_dir: String,
     command: Vec<String>,
 ) -> Result<i32> {
@@ -191,6 +212,7 @@ fn default_run(
         extra_mounts,
         instance: instance.unwrap_or_default(),
         ephemeral_name: String::new(),
+        network,
         project_dir,
         command,
     })

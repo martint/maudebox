@@ -200,6 +200,31 @@ The container can reach services running on the host (e.g. an HTTP MCP server, a
 
 For an HTTP MCP server in particular, either drop a `.mcp.json` at the project root with the URL (it's bind-mounted in and Claude picks it up automatically), or run `claude mcp add --transport http <name> http://host.docker.internal:<port>` once — that persists in the shared state volume and is available in every future container.
 
+### Reaching a service in another container (e.g. docker-compose)
+
+`host.docker.internal` only reaches services **published to the host**. If a service runs in its own container — typically brought up by its own `docker compose` project — and you'd rather not publish its port to the host at all (so it stays off the machine's public interface), join its Docker network directly instead:
+
+```sh
+maudebox --network myservice_default . claude
+```
+
+Compose creates a network named `<compose-project>_default` (the project name defaults to the compose directory's basename; check `docker network ls`). On that network the service is reachable by its **compose service name** and **container port** — e.g. `http://app:8080` — with nothing published to the host. `host.docker.internal` still resolves, so host-published services remain reachable too.
+
+`--network` is repeatable, so the container can join several networks at once — handy when a service and its database live in separate compose stacks:
+
+```sh
+maudebox --network app_default --network db_default . claude
+```
+
+Set it once in `the user config` to apply to every invocation — a bare string for one network, or an array for several:
+
+```toml
+network = "myservice_default"            # single
+network = ["app_default", "db_default"]  # several
+```
+
+Any `--network` flag overrides the config key entirely (the two don't merge). The named networks must already exist — bring the relevant compose projects up first.
+
 ### Managed MCP servers
 
 If you want one or more MCP servers available in **every** maudebox container with no per-container `claude mcp add`, declare them in the user config as `[mcp.NAME]` tables:
