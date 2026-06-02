@@ -12,6 +12,7 @@ mod manifest;
 mod mount;
 mod paths;
 mod resolve;
+mod tmux;
 mod vcs;
 mod volume;
 

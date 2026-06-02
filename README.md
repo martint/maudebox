@@ -10,7 +10,8 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 - `git` and [`jj`](https://github.com/jj-vcs/jj) (Jujutsu VCS)
 - Claude Code CLI
 - GitHub CLI (`gh`)
-- `ripgrep`, `vim`, `less`, `sudo`, OpenSSH client (`ssh`, `ssh-keygen`, `scp`)
+- `ripgrep`, `jq`, `vim`, `less`, `sudo`, OpenSSH client (`ssh`, `ssh-keygen`, `scp`)
+- `perf` (Linux profiler) — works for userspace profiling out of the box; kernel-mode profiling needs `sudo perf …` or a relaxed host `perf_event_paranoid`
 
 Builds natively on amd64 and arm64.
 
@@ -54,7 +55,7 @@ cargo xtask all              # both, in one go
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --rust-version 1.95.0 --bun-version 1.3.13 --pnpm-version 11.1.0 --claude-version 2.1.158 --tag maudebox
+cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --rust-version 1.95.0 --bun-version 1.3.13 --pnpm-version 11.1.0 --claude-version 2.1.170 --tag maudebox
 ```
 
 ## Run

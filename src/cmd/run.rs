@@ -319,6 +319,12 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     args.push(opts.image.clone());
     args.extend(command);
 
+    // When launched inside tmux, name the window after the instance so the
+    // status bar / iTerm2 tmux tab tracks the feature for the container's
+    // lifetime. The guard restores the prior window name on drop (after docker
+    // exits). No-op outside tmux.
+    let _tmux_window = crate::tmux::WindowName::apply(&instance_name);
+
     docker::run_inherit(&args)
 }
 

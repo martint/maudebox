@@ -15,7 +15,7 @@ const DEFAULT_JJ_VERSION: &str = "0.41.0";
 const DEFAULT_RUST_VERSION: &str = "1.95.0";
 const DEFAULT_BUN_VERSION: &str = "1.3.13";
 const DEFAULT_PNPM_VERSION: &str = "11.1.0";
-const DEFAULT_CLAUDE_VERSION: &str = "2.1.158";
+const DEFAULT_CLAUDE_VERSION: &str = "2.1.170";
 const DEFAULT_TAG: &str = "maudebox";
 
 const USAGE: &str = "\
@@ -32,7 +32,7 @@ Options for `image` and `all`:
   --rust-version VERSION    default: 1.95.0
   --bun-version VERSION     default: 1.3.13
   --pnpm-version VERSION    default: 11.1.0
-  --claude-version VERSION  default: 2.1.158
+  --claude-version VERSION  default: 2.1.170
   --tag TAG                 default: maudebox
 ";
 

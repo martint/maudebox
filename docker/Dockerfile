@@ -6,7 +6,7 @@ ARG JJ_VERSION=0.41.0
 ARG RUST_VERSION=1.95.0
 ARG BUN_VERSION=1.3.13
 ARG PNPM_VERSION=11.1.0
-ARG CLAUDE_VERSION=2.1.158
+ARG CLAUDE_VERSION=2.1.170
 
 # The container starts as root for the privileged setup (overlay mount, volume
 # chowns) and on Linux drops to the host UID before exec'ing the user command —
@@ -72,7 +72,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         gh \
         git \
+        jq \
         less \
+        linux-tools-generic \
         openssh-client \
         python-is-python3 \
         python3 \
@@ -85,6 +87,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         util-linux \
         vim \
     && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu's /usr/bin/perf is a wrapper that dispatches to
+# /usr/lib/linux-tools/$(uname -r)/perf based on the *running* kernel. Inside a
+# container uname -r reports the host kernel, which won't match the version the
+# noble package shipped, so the wrapper bails with "perf not found for kernel".
+# Symlink straight to the bundled binary to bypass the dispatch — perf is
+# forward/backward compatible enough for the common cases (cycles, instructions,
+# userspace stacks). Profiling beyond the host's perf_event_paranoid level needs
+# `sudo perf …` since the Linux entrypoint drops CAP_PERFMON/CAP_SYS_ADMIN.
+RUN ln -sf "$(ls -d /usr/lib/linux-tools/*/perf | head -1)" /usr/local/bin/perf
 
 # On Linux the entrypoint drops to a "host" user at HOST_UID before exec'ing
 # the user command, so privileged work (apt-get, mounts, etc.) needs sudo.

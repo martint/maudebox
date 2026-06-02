@@ -96,6 +96,16 @@ if [ -n "${HOST_PROJECT_DIR:-}" ]; then
     fi
 fi
 
+# ── terminal/pane title ───────────────────────────────────────────────────────
+# Name the terminal after the maudebox instance (OSC 2) so a non-tmux terminal
+# tab tracks the feature. prompt.sh re-asserts this on every interactive prompt;
+# emitting it here also covers non-interactive launches (e.g. `maudebox . claude`)
+# that never draw a bash prompt. Under tmux the window name (set host-side via
+# `tmux rename-window`) is what the tab shows, not this.
+if [ -n "${MAUDEBOX_INSTANCE:-}" ]; then
+    printf '\033]2;%s\033\\' "$MAUDEBOX_INSTANCE"
+fi
+
 # ── drop privileges (Linux) ───────────────────────────────────────────────────
 # On Linux Docker, container UID 0 maps to host UID 0 through bind mounts, so
 # any file the container writes into a bind-mounted host path lands as root on

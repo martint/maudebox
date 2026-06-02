@@ -36,7 +36,15 @@ __dev_prompt_vcs() {
     fi
 }
 
-PROMPT_COMMAND='__dev_prompt_vcs'
+# Set the terminal/pane title to the maudebox instance name (OSC 2; #T in tmux),
+# re-asserted each prompt so it survives programs that clobber the title
+# mid-session. Under tmux the iTerm2 tab tracks the window name instead, which
+# the host wrapper sets via `tmux rename-window`.
+__dev_prompt_title() {
+    printf '\033]2;%s\033\\' "${MAUDEBOX_INSTANCE:-maudebox}"
+}
+
+PROMPT_COMMAND='__dev_prompt_vcs; __dev_prompt_title'
 
 # Two-line prompt:
 #   cyan/path  yellow/(vcs)
