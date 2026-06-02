@@ -61,7 +61,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         format!("type=volume,src={STATE_VOLUME},dst=/root/.ssh,volume-subpath=ssh"),
     ];
     let host_claude_dir = home()?.join(".claude");
-    for p in ["CLAUDE.md", "settings.json", "agents", "commands", "plugins"] {
+    for p in ["CLAUDE.md", "settings.json", "agents", "commands", "skills", "plugins"] {
         let host_path = host_claude_dir.join(p);
         if host_path.exists() {
             claude_mounts.push("-v".into());

@@ -32,7 +32,7 @@ Maven's local repository (`~/.m2/repository`) is a shared mutable store. When tw
 
 ### Shared logins and global config
 
-As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `plugins/`) is bind-mounted read-only, and login state for Claude and the GitHub CLI — plus any SSH keys you generate inside a container — is kept in a shared persistent Docker volume. Log in once to each inside any container; every future container for any worktree is already logged in.
+As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `skills/`, `plugins/`) is bind-mounted read-only, and login state for Claude and the GitHub CLI — plus any SSH keys you generate inside a container — is kept in a shared persistent Docker volume. Log in once to each inside any container; every future container for any worktree is already logged in.
 
 ## Prerequisites
 
