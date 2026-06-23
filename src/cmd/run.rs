@@ -164,11 +164,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let instance_name = if opts.instance.is_empty() {
-        basename
-    } else {
-        format!("{basename}-{}", opts.instance)
-    };
+    let instance_name = instance_handle(&basename, &opts.instance);
     let mut label_strs: Vec<String> = vec![
         format!("maudebox.instance={instance_name}"),
         format!("maudebox.project={}", project_dir.display()),
@@ -326,6 +322,19 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     let _tmux_window = crate::tmux::WindowName::apply(&instance_name);
 
     docker::run_inherit(&args)
+}
+
+// Build the instance handle from a project basename and the `--instance`
+// discriminator: the bare basename when no discriminator was given, else
+// `<basename>-<discriminator>`. Used both here (container name / label /
+// `$MAUDEBOX_INSTANCE`) and by `list` to reconstruct the handle for a stopped
+// `maudebox new` instance from its manifest.
+pub fn instance_handle(basename: &str, discriminator: &str) -> String {
+    if discriminator.is_empty() {
+        basename.to_string()
+    } else {
+        format!("{basename}-{discriminator}")
+    }
 }
 
 // Bash aliases only fire for interactive shells, so a non-interactive

@@ -1,4 +1,6 @@
+use crate::cmd::run::instance_handle;
 use crate::docker;
+use crate::manifest;
 use crate::volume::compute_state_dir;
 use anyhow::Result;
 use std::path::PathBuf;
@@ -18,10 +20,22 @@ struct ContainerRow {
     ephemeral: String,
 }
 
-// An "instance" is a project: anything currently running OR with at least
-// one overlay volume on disk shows up. Volume labels are authoritative when
-// available — they survive container exit, so a stopped instance still has
-// full metadata. Container labels fill in when there's no volume yet.
+#[derive(Debug, Default)]
+struct ManifestRow {
+    project: String,
+    instance: String,
+}
+
+// An instance is a `(project, instance-handle)` pair: anything currently
+// running, with at least one overlay volume on disk, OR created by `maudebox
+// new` (a persisted manifest) shows up. Keying on the pair rather than the
+// project alone keeps `--instance` variants — several containers against one
+// project, distinguished only by their `maudebox.instance` label — as separate
+// rows instead of collapsing them. The three sources are independent: a
+// `new`-created workspace with no overlay mount has no volume, and once its
+// container exits `docker ps` shows nothing, so its manifest is the only record
+// left. The instance handle comes straight from each source's label (the
+// manifest reconstructs it from the target basename and recorded discriminator).
 //
 // An ephemeral instance whose keep flag is set is shown as non-ephemeral,
 // since at that point the workspace will outlive the container.
@@ -71,16 +85,51 @@ pub fn run() -> Result<i32> {
         })
         .collect();
 
-    let mut projects: Vec<String> = volumes
-        .iter()
-        .map(|v| v.project.clone())
-        .chain(running.iter().map(|r| r.project.clone()))
-        .filter(|p| !p.is_empty())
+    // `maudebox new` instances: the manifest's `target` is the worktree (and
+    // thus the project) path. Skip legacy manifests with no target and any
+    // whose workspace has since been removed out-of-band. The full instance
+    // handle is reconstructed from the target basename and the recorded
+    // `--instance` discriminator, exactly as `run` builds the label;
+    // volume/container labels still override it in the merge below.
+    let manifests: Vec<ManifestRow> = manifest::all()?
+        .into_iter()
+        .filter_map(|(_state_dir, m)| {
+            if m.target.is_empty() {
+                return None;
+            }
+            let target = PathBuf::from(&m.target);
+            if !target.is_dir() {
+                return None;
+            }
+            let basename = target
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            Some(ManifestRow {
+                instance: instance_handle(&basename, &m.instance),
+                project: m.target,
+            })
+        })
         .collect();
-    projects.sort();
-    projects.dedup();
 
-    if projects.is_empty() {
+    // An instance is identified by its `(project, instance-handle)` pair, not the
+    // project path alone: `--instance` lets several containers run against one
+    // project, each with a distinct `maudebox.instance` label but the *same*
+    // `maudebox.project`. Keying on project alone collapses them into one row and
+    // hides every `--instance` variant behind the first. Overlay volumes and the
+    // state dir are per-project (shared across a project's instances), so the
+    // OVERLAYS count below is still counted by project.
+    let mut keys: Vec<(String, String)> = volumes
+        .iter()
+        .map(|v| (v.project.clone(), v.instance.clone()))
+        .chain(running.iter().map(|r| (r.project.clone(), r.instance.clone())))
+        .chain(manifests.iter().map(|m| (m.project.clone(), m.instance.clone())))
+        .filter(|(p, _)| !p.is_empty())
+        .collect();
+    keys.sort();
+    keys.dedup();
+
+    if keys.is_empty() {
         println!("No maudebox instances found.");
         return Ok(0);
     }
@@ -94,14 +143,14 @@ pub fn run() -> Result<i32> {
         "PATH".into(),
     ]];
 
-    for project in &projects {
-        let vol = volumes.iter().find(|v| &v.project == project);
-        let run = running.iter().find(|r| &r.project == project);
-        let instance = vol
-            .map(|v| v.instance.clone())
-            .filter(|s| !s.is_empty())
-            .or_else(|| run.map(|r| r.instance.clone()))
-            .unwrap_or_default();
+    for (project, instance) in &keys {
+        let vol = volumes
+            .iter()
+            .find(|v| &v.project == project && &v.instance == instance);
+        let run = running
+            .iter()
+            .find(|r| &r.project == project && &r.instance == instance);
+        let instance = instance.clone();
         let mut ephemeral = vol
             .map(|v| v.ephemeral.clone())
             .filter(|s| !s.is_empty())

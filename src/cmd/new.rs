@@ -170,6 +170,7 @@ pub fn run(
     // distinguish a maudebox-created worktree from a user-handed path; the
     // recorded `target` is what lets `maudebox <name>` reattach without the
     // user typing the worktree path back.
+    let discriminator = instance.unwrap_or_default();
     let state_dir = compute_state_dir(&target)?;
     manifest::write(
         &state_dir,
@@ -178,6 +179,7 @@ pub fn run(
             source: source.display().to_string(),
             name: name.clone(),
             target: target.display().to_string(),
+            instance: discriminator.clone(),
         },
     )?;
 
@@ -187,7 +189,7 @@ pub fn run(
         image,
         memory_from: source.display().to_string(),
         extra_mounts,
-        instance: instance.unwrap_or_default(),
+        instance: discriminator,
         ephemeral_name: if ephemeral { name.clone() } else { String::new() },
         network,
         project_dir: target.display().to_string(),

@@ -39,6 +39,15 @@ pub struct Manifest {
     /// compatibility with manifests written before this field existed.
     #[serde(default)]
     pub target: String,
+    /// The `--instance` discriminator passed to `maudebox new`, if any (empty
+    /// when none was given). The discriminator isn't part of the workspace's
+    /// identity — only its container name / `$MAUDEBOX_INSTANCE` — so it lives
+    /// nowhere else once the container exits. Recording it lets `list`
+    /// reconstruct the full instance handle (`<basename>-<discriminator>`) for
+    /// a stopped instance with no overlay volume or running container to read
+    /// it from. Defaulted for backward compatibility with older manifests.
+    #[serde(default)]
+    pub instance: String,
 }
 
 pub fn manifest_path(state_dir: &Path) -> PathBuf {
@@ -67,13 +76,12 @@ pub fn read(state_dir: &Path) -> Result<Option<Manifest>> {
     }
 }
 
-// Walk $XDG_STATE_HOME/maudebox/instances/* and return every manifest whose
-// `name` matches `query` and whose recorded target still exists on disk.
-// Used by `maudebox <name>` to reattach without the user typing the worktree
-// path. Manifests written before the `target` field existed are skipped (the
-// field is empty, so there's nothing to reattach to); the user can fall back
-// to `maudebox <path>`.
-pub fn find_by_name(query: &str) -> Result<Vec<(PathBuf, Manifest)>> {
+// Walk $XDG_STATE_HOME/maudebox/instances/* and return every readable
+// manifest paired with its state dir. The state dir's presence is the marker
+// that maudebox created the worktree, so this is the authoritative record of
+// `maudebox new` instances independent of any overlay volume or running
+// container.
+pub fn all() -> Result<Vec<(PathBuf, Manifest)>> {
     let root = xdg_state_home()?.join("maudebox").join("instances");
     let entries = match fs::read_dir(&root) {
         Ok(e) => e,
@@ -87,6 +95,19 @@ pub fn find_by_name(query: &str) -> Result<Vec<(PathBuf, Manifest)>> {
             continue;
         }
         let Ok(Some(m)) = read(&path) else { continue };
+        out.push((path, m));
+    }
+    Ok(out)
+}
+
+// Return every manifest whose `name` matches `query` and whose recorded target
+// still exists on disk, paired with that target path. Used by `maudebox <name>`
+// to reattach without the user typing the worktree path. Manifests written
+// before the `target` field existed are skipped (the field is empty, so
+// there's nothing to reattach to); the user can fall back to `maudebox <path>`.
+pub fn find_by_name(query: &str) -> Result<Vec<(PathBuf, Manifest)>> {
+    let mut out = Vec::new();
+    for (_state_dir, m) in all()? {
         if m.name != query || m.target.is_empty() {
             continue;
         }
@@ -113,6 +134,7 @@ mod tests {
             source: "/home/user/projects/myproj".into(),
             name: "feature-x".into(),
             target: "/home/user/projects/myproj.feature-x".into(),
+            instance: "review".into(),
         };
         write(&tmp, &m).unwrap();
         let back = read(&tmp).unwrap().unwrap();
@@ -120,6 +142,7 @@ mod tests {
         assert_eq!(back.source, m.source);
         assert_eq!(back.name, m.name);
         assert_eq!(back.target, m.target);
+        assert_eq!(back.instance, m.instance);
         fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -139,6 +162,7 @@ name = "feature-x"
         assert_eq!(back.kind, WorkspaceKind::Git);
         assert_eq!(back.name, "feature-x");
         assert_eq!(back.target, "");
+        assert_eq!(back.instance, "");
         fs::remove_dir_all(&tmp).unwrap();
     }
 
