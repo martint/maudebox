@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM eclipse-temurin:25-jdk-noble
+FROM eclipse-temurin:26-jdk-noble
 
 ARG MVND_VERSION=1.0.5
 ARG JJ_VERSION=0.41.0

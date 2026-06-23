@@ -2,7 +2,7 @@
 
 A Docker image for working on Maven projects (and adjacent polyglot bits) with [Claude Code](https://claude.ai/code) in an isolated, reproducible Linux environment. Bundles:
 
-- Eclipse Temurin JDK 25
+- Eclipse Temurin JDK 26
 - [`mvnd`](https://github.com/apache/maven-mvnd) (Maven Daemon) — symlinked as both `mvnd` and `mvn`
 - A Rust toolchain (rustup-managed, default 1.95.0) plus `build-essential` for crates with native dependencies
 - Python 3 with `pip`, `venv`, and development headers (`python` is symlinked to `python3`)
