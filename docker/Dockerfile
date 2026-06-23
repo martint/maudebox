@@ -7,6 +7,8 @@ ARG RUST_VERSION=1.95.0
 ARG BUN_VERSION=1.3.13
 ARG PNPM_VERSION=11.1.0
 ARG CLAUDE_VERSION=2.1.170
+ARG PLAYWRIGHT_VERSION=1.61.0
+ARG PLAYWRIGHT_MCP_VERSION=0.0.76
 
 # The container starts as root for the privileged setup (overlay mount, volume
 # chowns) and on Linux drops to the host UID before exec'ing the user command —
@@ -236,8 +238,60 @@ RUN set -eux; \
 # targets — add `~/.bun:~/.bun:overlay` or
 # `~/.local/share/pnpm:~/.local/share/pnpm:overlay` to your config to give
 # each worktree its own writable cache layered over a shared host warm-start.
+# Pin bun's install root so it doesn't depend on $HOME being set (a Docker
+# build can run with HOME unset, and bun then aborts with "No global directory
+# found"). /root/.bun is the same dir bun's default ($HOME/.bun) resolves to at
+# runtime, so build and runtime agree.
+ENV BUN_INSTALL=/root/.bun
 ENV PNPM_HOME=/root/.local/share/pnpm
-ENV PATH=/root/.bun/bin:/root/.local/share/pnpm:$PATH
+ENV PATH=/root/.bun/bin:/opt/bun/bin:/root/.local/share/pnpm:$PATH
+
+# ── Playwright (browser automation + MCP for Claude) ──────────────────────────
+# No Node.js lives in this image, so Playwright runs under bun. `bun install -g`
+# fetches the `playwright` CLI and the `@playwright/mcp` server but only links
+# their package `cli.js` into <root>/bin via a `#!/usr/bin/env node` shebang
+# symlink — which can't run here. So we replace those two bin entries with
+# wrappers that `exec bun <cli.js>`; bun ignores the shebang and executes the JS
+# directly. We resolve each symlink to its real cli.js and `rm` the symlink
+# *before* writing the wrapper — writing through the still-present symlink would
+# clobber cli.js itself (the wrapper would then point at its own text). The
+# server's bin is `playwright-mcp` — point an `[mcp.playwright]` table at it in
+# your config.toml to let Claude Code drive a browser.
+#
+# This install root is /opt/bun, NOT the runtime BUN_INSTALL (/root/.bun), and
+# the distinction is load-bearing: the Linux entrypoint chowns the whole /root
+# tree to the host UID on every launch, so a couple-thousand-file Playwright
+# install under /root/.bun would be re-chowned on each fresh container — a
+# visible pre-prompt pause. Keeping it under /opt (world-readable/executable via
+# `chmod -R a+rX`, like the Rust toolchain under /usr/local and the browsers
+# under /ms-playwright) sits it outside that sweep. /root/.bun stays empty at
+# build time for the user's own runtime `bun install -g`. Both bin dirs are on
+# PATH, with /root/.bun/bin first so user globals win.
+#
+# Browsers install into a system path (PLAYWRIGHT_BROWSERS_PATH) rather than the
+# per-user default under ~/.cache, so they sit outside any volume or overlay and
+# every worktree shares one read-only Chromium instead of re-downloading per
+# container. `--with-deps` apt-installs Chromium's shared libraries (we're still
+# root at build time). Only Chromium is bundled; run `playwright install firefox
+# webkit` by hand if you need the others. Chromium ships native amd64 and arm64
+# builds, so no `uname -m` branching is needed — Playwright fetches the build
+# matching the host arch.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN set -eux; \
+    export BUN_INSTALL=/opt/bun; \
+    bun install -g \
+        "playwright@${PLAYWRIGHT_VERSION}" \
+        "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}"; \
+    for name in playwright playwright-mcp; do \
+        cli="$(readlink -f "$BUN_INSTALL/bin/$name")"; \
+        rm "$BUN_INSTALL/bin/$name"; \
+        printf '#!/bin/sh\nexec bun %s "$@"\n' "$cli" > "$BUN_INSTALL/bin/$name"; \
+        chmod +x "$BUN_INSTALL/bin/$name"; \
+    done; \
+    chmod -R a+rX "$BUN_INSTALL"; \
+    playwright install --with-deps chromium; \
+    chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"; \
+    rm -rf /var/lib/apt/lists/*
 
 # Overlay mount points (e.g. /maudebox/overlay-N/{lower,upper}) are created
 # at runtime by Docker when the wrapper passes -v for them, so no build-time
