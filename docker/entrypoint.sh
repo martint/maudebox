@@ -63,6 +63,12 @@ if [ -d "$CLAUDE_DIR" ]; then
     CLAUDE_STATE="$CLAUDE_DIR/state.json"
     if [ ! -s "$CLAUDE_STATE" ]; then
         (umask 077 && echo '{}' > "$CLAUDE_STATE")
+        # Created here as root. The chown sweep below skips .claude's deep tree
+        # once its root is host-owned (steady state), so hand this freshly
+        # created file to the host UID now rather than relying on that sweep.
+        if [ -n "${HOST_UID:-}" ] && [ "${HOST_UID:-0}" != "0" ]; then
+            chown "${HOST_UID}:${HOST_GID:-$HOST_UID}" "$CLAUDE_STATE" 2>/dev/null || true
+        fi
     fi
     if [ ! -L "$HOME_DIR/.claude.json" ] || [ "$(readlink -- "$HOME_DIR/.claude.json")" != "$CLAUDE_STATE" ]; then
         rm -f "$HOME_DIR/.claude.json"
@@ -142,12 +148,25 @@ if [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ] && [ "$HOST_UID" != "0" ]; t
     # the dropped-privilege user can't write anything. -xdev keeps find from
     # crossing into bind-mounted host config (e.g. /root/.claude/CLAUDE.md,
     # which lives on a different fs and would refuse chown anyway). The
-    # ! -uid test makes repeat runs no-ops. The /maudebox/overlay-*/upper
-    # glob covers any per-overlay upper-layer volumes mounted by the wrapper;
-    # nullglob keeps it harmless when no overlays are active.
+    # /maudebox/overlay-*/upper glob covers any per-overlay upper-layer volumes
+    # mounted by the wrapper; nullglob keeps it harmless when no overlays active.
+    #
+    # Skip the recursive walk once a tree's root is already host-owned. On Linux
+    # every file the dropped-privilege user writes — and every overlay copy-up —
+    # lands host-owned, so the only root-owned entries are the Docker-created
+    # volume mount points and the dirs this entrypoint mkdir's as root above,
+    # all near the top. After the first launch the root dir is host-owned and a
+    # `find` over the whole tree chowns nothing — but walking a warmed ~/.m2
+    # overlay (100k+ files) or months of accumulated ~/.claude session logs just
+    # to confirm that costs seconds before the prompt. Recurse only when the
+    # root isn't host-owned yet, which is exactly first launch when the tree is
+    # still empty/tiny. /root itself is reset to root-ownership by every --rm
+    # launch so it always recurses — cheap, since -xdev keeps it on the small
+    # container rootfs and off the volume submounts underneath it.
     shopt -s nullglob
     for d in /maudebox/overlay-*/upper /root/.claude /root/.config/gh /root/.ssh /root; do
         [ -e "$d" ] || continue
+        [ "$(stat -c %u "$d" 2>/dev/null)" = "$HOST_UID" ] && continue
         find "$d" -xdev \! -uid "$HOST_UID" \
             -exec chown -h "${HOST_UID}:${HOST_GID}" {} + 2>/dev/null || true
     done
