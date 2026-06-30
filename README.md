@@ -4,7 +4,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 
 - Eclipse Temurin JDK 26
 - [`mvnd`](https://github.com/apache/maven-mvnd) (Maven Daemon) — symlinked as both `mvnd` and `mvn`
-- A Rust toolchain (rustup-managed, default 1.95.0) plus `build-essential` for crates with native dependencies
+- A Rust toolchain (rustup-managed, default 1.96.1) plus `build-essential` for crates with native dependencies
 - Python 3 with `pip`, `venv`, and development headers (`python` is symlinked to `python3`)
 - [`bun`](https://bun.sh) and [`pnpm`](https://pnpm.io) for JavaScript/TypeScript work (pnpm bundles its own Node.js; bun is its own runtime)
 - [Playwright](https://playwright.dev) — the `playwright` CLI with Chromium and its OS dependencies preinstalled, plus the [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) server (`playwright-mcp`) so Claude can drive a browser. Both run under `bun` (no Node.js needed); browsers live in a shared system path, so add an `[mcp.playwright]` table pointing at `playwright-mcp` to wire it into Claude Code
@@ -49,14 +49,14 @@ The repo is a Cargo workspace. One tool builds both the host-side wrapper and th
 
 ```sh
 cargo build --release        # wrapper binary at target/release/maudebox
-cargo xtask image            # docker image (defaults: mvnd 1.0.5, jj 0.41.0, tag maudebox)
+cargo xtask image            # docker image (defaults: mvnd 1.0.6, jj 0.43.0, tag maudebox)
 cargo xtask all              # both, in one go
 ```
 
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.5 --jj-version 0.41.0 --rust-version 1.95.0 --bun-version 1.3.13 --pnpm-version 11.1.0 --claude-version 2.1.170 --playwright-version 1.61.0 --playwright-mcp-version 0.0.76 --tag maudebox
+cargo xtask image --mvnd-version 1.0.6 --jj-version 0.43.0 --rust-version 1.96.1 --bun-version 1.3.14 --pnpm-version 11.10.0 --claude-version 2.1.205 --playwright-version 1.61.1 --playwright-mcp-version 0.0.77 --tag maudebox
 ```
 
 ## Run

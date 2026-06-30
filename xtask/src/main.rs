@@ -10,14 +10,14 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const DEFAULT_MVND_VERSION: &str = "1.0.5";
-const DEFAULT_JJ_VERSION: &str = "0.41.0";
-const DEFAULT_RUST_VERSION: &str = "1.95.0";
-const DEFAULT_BUN_VERSION: &str = "1.3.13";
-const DEFAULT_PNPM_VERSION: &str = "11.1.0";
-const DEFAULT_CLAUDE_VERSION: &str = "2.1.170";
-const DEFAULT_PLAYWRIGHT_VERSION: &str = "1.61.0";
-const DEFAULT_PLAYWRIGHT_MCP_VERSION: &str = "0.0.76";
+const DEFAULT_MVND_VERSION: &str = "1.0.6";
+const DEFAULT_JJ_VERSION: &str = "0.43.0";
+const DEFAULT_RUST_VERSION: &str = "1.96.1";
+const DEFAULT_BUN_VERSION: &str = "1.3.14";
+const DEFAULT_PNPM_VERSION: &str = "11.10.0";
+const DEFAULT_CLAUDE_VERSION: &str = "2.1.205";
+const DEFAULT_PLAYWRIGHT_VERSION: &str = "1.61.1";
+const DEFAULT_PLAYWRIGHT_MCP_VERSION: &str = "0.0.77";
 const DEFAULT_TAG: &str = "maudebox";
 
 const USAGE: &str = "\
@@ -29,14 +29,14 @@ Subcommands:
   help     Show this help.
 
 Options for `image` and `all`:
-  --mvnd-version VERSION    default: 1.0.5
-  --jj-version VERSION      default: 0.41.0
-  --rust-version VERSION    default: 1.95.0
-  --bun-version VERSION     default: 1.3.13
-  --pnpm-version VERSION    default: 11.1.0
-  --claude-version VERSION  default: 2.1.170
-  --playwright-version VERSION      default: 1.61.0
-  --playwright-mcp-version VERSION  default: 0.0.76
+  --mvnd-version VERSION    default: 1.0.6
+  --jj-version VERSION      default: 0.43.0
+  --rust-version VERSION    default: 1.96.1
+  --bun-version VERSION     default: 1.3.14
+  --pnpm-version VERSION    default: 11.10.0
+  --claude-version VERSION  default: 2.1.205
+  --playwright-version VERSION      default: 1.61.1
+  --playwright-mcp-version VERSION  default: 0.0.77
   --tag TAG                 default: maudebox
 ";
 
