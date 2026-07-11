@@ -3,13 +3,13 @@ FROM eclipse-temurin:26-jdk-noble
 
 ARG MVND_VERSION=1.0.6
 ARG JJ_VERSION=0.43.0
-ARG RUST_VERSION=1.96.1
+ARG RUST_VERSION=1.97.0
 ARG BUN_VERSION=1.3.14
-ARG PNPM_VERSION=11.10.0
-ARG CLAUDE_VERSION=2.1.205
+ARG PNPM_VERSION=11.12.0
+ARG CLAUDE_VERSION=2.1.207
 ARG CODEX_VERSION=0.144.1
 ARG PLAYWRIGHT_VERSION=1.61.1
-ARG PLAYWRIGHT_MCP_VERSION=0.0.77
+ARG PLAYWRIGHT_MCP_VERSION=0.0.78
 
 # The container starts as root for the privileged setup (overlay mount, volume
 # chowns) and on Linux drops to the host UID before exec'ing the user command —

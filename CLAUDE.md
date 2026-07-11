@@ -21,11 +21,11 @@ Build the wrapper binary (drops it at `target/release/maudebox`):
 cargo build --release
 ```
 
-Build the image (defaults: `mvnd 1.0.6`, `jj 0.43.0`, `bun 1.3.14`, `pnpm 11.10.0`, `claude 2.1.205`, `codex 0.144.1`, `playwright 1.61.1`, `@playwright/mcp 0.0.77`, tag `maudebox`):
+Build the image (defaults: `mvnd 1.0.6`, `jj 0.43.0`, `bun 1.3.14`, `pnpm 11.12.0`, `claude 2.1.207`, `codex 0.144.1`, `playwright 1.61.1`, `@playwright/mcp 0.0.78`, tag `maudebox`):
 
 ```
 cargo xtask image
-cargo xtask image --mvnd-version 1.0.6 --jj-version 0.43.0 --bun-version 1.3.14 --pnpm-version 11.10.0 --claude-version 2.1.205 --codex-version 0.144.1 --playwright-version 1.61.1 --playwright-mcp-version 0.0.77 --tag maudebox
+cargo xtask image --mvnd-version 1.0.6 --jj-version 0.43.0 --bun-version 1.3.14 --pnpm-version 11.12.0 --claude-version 2.1.207 --codex-version 0.144.1 --playwright-version 1.61.1 --playwright-mcp-version 0.0.78 --tag maudebox
 ```
 
 Build everything (wrapper + image) in one go:
