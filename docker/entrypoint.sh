@@ -9,9 +9,10 @@
 # Requires:
 #   --cap-add SYS_ADMIN  (or --privileged)
 #   --mount type=volume,src=maudebox-state,dst=/root/.claude,volume-subpath=claude
+#   --mount type=volume,src=maudebox-state,dst=/root/.codex,volume-subpath=codex
 #   --mount type=volume,src=maudebox-state,dst=/root/.config/gh,volume-subpath=gh
 #   --mount type=volume,src=maudebox-state,dst=/root/.ssh,volume-subpath=ssh
-#       (all optional; together they persist Claude + gh login and SSH keys)
+#       (all optional; together they persist Claude + Codex + gh login and SSH keys)
 #   -v <project>:<project>          (bind-mount at the host path)
 #   HOST_PROJECT_DIR=<project>      (env var; entrypoint adds a /root/<basename> symlink and cd's there)
 #   HOST_UID, HOST_GID              (env vars; if set, drop privileges to those
@@ -84,6 +85,22 @@ fi
 # launch while still root: cheap and idempotent.
 if [ -d "$HOME_DIR/.ssh" ]; then
     chmod 700 "$HOME_DIR/.ssh"
+fi
+
+# ── Codex standalone install (for the `codex remote-control` daemon) ─────────
+# `codex remote-control start` requires the standalone layout at
+# $CODEX_HOME/packages/standalone/current/codex. $CODEX_HOME (=~/.codex) is the
+# maudebox-state volume, empty on first launch, so point `current` at the image's
+# /opt release — a symlink, not a ~336 MB copy. `releases/` stays a real dir in
+# the volume so a daemon-side update can land there rather than failing against
+# read-only /opt. Idempotent; runs as root before the Linux privilege drop, so
+# the chown sweep below hands the new entries to the host UID.
+if [ -d /opt/codex/packages/standalone ]; then
+    CODEX_STD="$HOME_DIR/.codex/packages/standalone"
+    if [ ! -e "$CODEX_STD/current" ]; then
+        mkdir -p "$CODEX_STD/releases"
+        ln -s /opt/codex/packages/standalone/current "$CODEX_STD/current"
+    fi
 fi
 
 # ── /root/<basename> convenience symlink + initial cwd ───────────────────────
@@ -164,7 +181,7 @@ if [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ] && [ "$HOST_UID" != "0" ]; t
     # launch so it always recurses — cheap, since -xdev keeps it on the small
     # container rootfs and off the volume submounts underneath it.
     shopt -s nullglob
-    for d in /maudebox/overlay-*/upper /root/.claude /root/.config/gh /root/.ssh /root; do
+    for d in /maudebox/overlay-*/upper /root/.claude /root/.codex /root/.config/gh /root/.ssh /root; do
         [ -e "$d" ] || continue
         [ "$(stat -c %u "$d" 2>/dev/null)" = "$HOST_UID" ] && continue
         find "$d" -xdev \! -uid "$HOST_UID" \

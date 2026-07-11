@@ -47,7 +47,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
 
     // ── persistent state (maudebox-state volume + read-only host overlays) ──
     docker::ensure_volume(STATE_VOLUME, &[])?;
-    docker::ensure_subpaths(&opts.image, STATE_VOLUME, &["claude", "gh", "ssh"])?;
+    docker::ensure_subpaths(&opts.image, STATE_VOLUME, &["claude", "codex", "gh", "ssh"])?;
 
     let mut claude_mounts: Vec<String> = vec![
         "--mount".into(),
@@ -60,7 +60,8 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         "--mount".into(),
         format!("type=volume,src={STATE_VOLUME},dst=/root/.ssh,volume-subpath=ssh"),
     ];
-    let host_claude_dir = home()?.join(".claude");
+    let h = home()?;
+    let host_claude_dir = h.join(".claude");
     for p in ["CLAUDE.md", "settings.json", "agents", "commands", "skills", "plugins"] {
         let host_path = host_claude_dir.join(p);
         if host_path.exists() {
@@ -96,9 +97,33 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         host_memory_dir.display()
     ));
 
+    // ── Codex state (maudebox-state subpath) + read-only host config ───────
+    // Codex keeps auth.json, config.toml, sessions, and its SQLite state DB
+    // under $CODEX_HOME (=/root/.codex in the image), so the shared subpath
+    // persists login and history across containers — same arrangement as
+    // Claude's. The SQLite DB opens in WAL mode with a busy_timeout, and the
+    // named volume is VM-local (not virtiofs), so concurrent containers share
+    // it as safely as concurrent sessions on one host. Codex's project-doc and
+    // memory equivalent is AGENTS.md; its user-global one lives at
+    // $CODEX_HOME/AGENTS.md, and user skills at ~/.agents/skills — bind both
+    // read-only so host config is picked up without host-path-keyed state.
+    let mut codex_mounts: Vec<String> = vec![
+        "--mount".into(),
+        format!("type=volume,src={STATE_VOLUME},dst=/root/.codex,volume-subpath=codex"),
+    ];
+    let codex_agents_md = h.join(".codex").join("AGENTS.md");
+    if codex_agents_md.exists() {
+        codex_mounts.push("-v".into());
+        codex_mounts.push(format!("{}:/root/.codex/AGENTS.md:ro", codex_agents_md.display()));
+    }
+    let codex_skills = h.join(".agents").join("skills");
+    if codex_skills.exists() {
+        codex_mounts.push("-v".into());
+        codex_mounts.push(format!("{}:/root/.agents/skills:ro", codex_skills.display()));
+    }
+
     // ── host VCS config (read-only) ────────────────────────────────────────
     let mut vcs_config_mounts: Vec<String> = Vec::new();
-    let h = home()?;
     let gitconfig = h.join(".gitconfig");
     let git_config_dir = h.join(".config").join("git");
     let jj_config = h.join(".config").join("jj").join("config.toml");
@@ -120,20 +145,35 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     }
 
     // ── managed MCP servers (config-file [mcp.NAME] tables) ────────────────
-    // Translate the user's TOML into a managed-mcp.json on the host and
-    // bind-mount it at /etc/claude-code/managed-mcp.json — Claude Code reads
-    // that path as enterprise-managed scope, so servers apply to every
-    // session without per-launch CLI work. No-op when the config has no
-    // [mcp.*] tables.
+    // One [mcp.NAME] table per server drives both agents. For Claude we
+    // translate the TOML into a managed-mcp.json and bind-mount it at
+    // /etc/claude-code/managed-mcp.json (enterprise-managed scope); for Codex
+    // we translate into /etc/codex/config.toml (system layer). The two agents
+    // spell MCP config differently, so a per-server [mcp.NAME.codex] sub-table
+    // carries Codex-only keys — see write_codex_config_toml. No-op for Claude
+    // when the config has no [mcp.*] tables; the Codex config is always written
+    // because it also carries the sandbox default.
+    let mcp_servers = read_mcp_servers()?;
     let mut managed_mcp_mount: Vec<String> = Vec::new();
-    if let Some(servers) = read_mcp_servers()? {
-        let host_path = write_managed_mcp_json(&servers)?;
+    if let Some(servers) = &mcp_servers {
+        let host_path = write_managed_mcp_json(servers)?;
         managed_mcp_mount.push("-v".into());
         managed_mcp_mount.push(format!(
             "{}:/etc/claude-code/managed-mcp.json:ro",
             host_path.display()
         ));
     }
+
+    // Codex system config: sandbox default (the container is the sandbox, so
+    // bypass Codex's own Landlock sandbox and approval prompts) plus any
+    // translated MCP servers. Lowest-precedence layer — the user's own
+    // ~/.codex/config.toml still overrides it. Always written.
+    let codex_config = write_codex_config_toml(mcp_servers.as_ref())?;
+    codex_mounts.push("-v".into());
+    codex_mounts.push(format!(
+        "{}:/etc/codex/config.toml:ro",
+        codex_config.display()
+    ));
 
     // ── extra mounts (CLI --mount + config-file mounts) ────────────────────
     let mut all_specs = opts.extra_mounts.clone();
@@ -282,12 +322,21 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     // collision (two concurrent containers picking the same name) surfaces
     // as a docker error; pass `--instance NAME` to discriminate, exactly
     // as for `$MAUDEBOX_INSTANCE` collisions.
+    //
+    // `--hostname` sets the container's hostname to the same handle (sanitized
+    // to a valid RFC 1123 label). Codex's remote-control identifies a paired
+    // server by hostname — with no config override — so without this each
+    // worktree would enroll under Docker's random container-ID hostname and be
+    // indistinguishable in the ChatGPT device list. This is the Codex analog of
+    // what $MAUDEBOX_INSTANCE already does for `claude --remote-control`.
     let mut args: Vec<String> = vec![
         "run".into(),
         "--rm".into(),
         "-it".into(),
         "--name".into(),
         instance_name.clone(),
+        "--hostname".into(),
+        sanitize_hostname(&instance_name),
         "--cap-add".into(),
         "SYS_ADMIN".into(),
         "--security-opt".into(),
@@ -309,6 +358,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     args.extend(ephemeral_mount);
     args.extend(project_mounts);
     args.extend(claude_mounts);
+    args.extend(codex_mounts);
     args.extend(managed_mcp_mount);
     args.extend(vcs_config_mounts);
     args.extend(extra_mount_args);
@@ -334,6 +384,31 @@ pub fn instance_handle(basename: &str, discriminator: &str) -> String {
         basename.to_string()
     } else {
         format!("{basename}-{discriminator}")
+    }
+}
+
+// Coerce an instance handle into a valid Docker `--hostname` (a single RFC 1123
+// label): lowercase, keep only `[a-z0-9-]` (everything else — dots, underscores,
+// spaces — becomes `-`), collapse runs of `-`, trim leading/trailing `-`, and
+// cap at 63 chars. Falls back to "maudebox" if nothing usable survives (e.g. a
+// basename that was all dots), so `docker run` never gets an empty/invalid arg.
+fn sanitize_hostname(handle: &str) -> String {
+    let mut out = String::with_capacity(handle.len());
+    for c in handle.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    let label: String = trimmed.chars().take(63).collect();
+    let label = label.trim_end_matches('-').to_string();
+    if label.is_empty() {
+        "maudebox".to_string()
+    } else {
+        label
     }
 }
 
@@ -395,7 +470,10 @@ fn write_managed_mcp_json(
     let mut root = serde_json::Map::new();
     let mut inner = serde_json::Map::new();
     for (name, val) in servers {
-        let json_val: serde_json::Value = serde_json::to_value(val)
+        // Drop the reserved `codex` sub-table (Codex-only overrides) so it
+        // doesn't leak into Claude's mcpServers entry as an unknown field.
+        let val = strip_reserved_key(val, "codex");
+        let json_val: serde_json::Value = serde_json::to_value(&val)
             .with_context(|| format!("converting mcp.{name} to JSON"))?;
         inner.insert(name.clone(), json_val);
     }
@@ -407,6 +485,111 @@ fn write_managed_mcp_json(
     fs::rename(&tmp, &path)
         .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
     Ok(path)
+}
+
+// Return a copy of a `[mcp.NAME]` server table with `key` removed. Used to
+// keep an agent's reserved override sub-table out of the other agent's config.
+// Non-table values pass through unchanged.
+fn strip_reserved_key(val: &toml::Value, key: &str) -> toml::Value {
+    match val.as_table() {
+        Some(t) => {
+            let mut t = t.clone();
+            t.remove(key);
+            toml::Value::Table(t)
+        }
+        None => val.clone(),
+    }
+}
+
+// Serialize the Codex system config (`/etc/codex/config.toml`) and write it
+// atomically to a stable host path, mirroring write_managed_mcp_json's inode
+// discipline. The file carries two things:
+//
+//   * a sandbox default — the maudebox container already *is* the sandbox, so
+//     Codex's own Landlock/seccomp sandbox and approval prompts are bypassed
+//     (matching IS_SANDBOX=1 for Claude). This is the lowest-precedence layer,
+//     so a user's ~/.codex/config.toml can still tighten it back up.
+//   * translated MCP servers — Codex spells MCP config as `[mcp_servers.NAME]`
+//     with a different field set than Claude's JSON (no `type`; transport is
+//     inferred from `command` vs `url`; `headers` is `http_headers`) and
+//     rejects unknown fields. We map the fields the two agents share and let a
+//     per-server `[mcp.NAME.codex]` sub-table supply Codex-only keys verbatim.
+fn write_codex_config_toml(
+    servers: Option<&std::collections::BTreeMap<String, toml::Value>>,
+) -> Result<PathBuf> {
+    let dir = xdg_state_home()?.join("maudebox");
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join("codex-config.toml");
+
+    let mut out = String::from(
+        "# Generated by maudebox — Codex system config layer (lowest precedence).\n\
+         # Your ~/.codex/config.toml overrides anything here.\n\n\
+         sandbox_mode = \"danger-full-access\"\n\
+         approval_policy = \"never\"\n\
+         # The standalone install `current` points into the read-only image; keep\n\
+         # the remote-control daemon from auto-updating (which would un-pin it).\n\
+         check_for_update_on_startup = false\n",
+    );
+
+    if let Some(servers) = servers {
+        let mut mcp = toml::map::Map::new();
+        for (name, val) in servers {
+            mcp.insert(name.clone(), translate_mcp_for_codex(name, val));
+        }
+        let mut table = toml::map::Map::new();
+        table.insert("mcp_servers".into(), toml::Value::Table(mcp));
+        // The only top-level key here is the `mcp_servers` table, so there is
+        // no value-after-table ordering hazard in the TOML serializer.
+        let servers_toml = toml::to_string(&toml::Value::Table(table))
+            .context("serializing Codex mcp_servers")?;
+        out.push('\n');
+        out.push_str(&servers_toml);
+    }
+
+    let tmp = dir.join(format!("codex-config.toml.tmp.{}", std::process::id()));
+    fs::write(&tmp, out).with_context(|| format!("writing {}", tmp.display()))?;
+    fs::rename(&tmp, &path)
+        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+    Ok(path)
+}
+
+// Translate one `[mcp.NAME]` table into Codex's `[mcp_servers.NAME]` shape.
+// Fields the two agents share map across; `type` is dropped (Codex infers the
+// transport); `headers` becomes `http_headers`; a `[mcp.NAME.codex]` sub-table
+// is merged last as Codex-only overrides passed through verbatim. Any other
+// field is dropped with a warning, since Codex rejects unknown keys — the
+// escape hatch is to move it under `[mcp.NAME.codex]`.
+fn translate_mcp_for_codex(name: &str, val: &toml::Value) -> toml::Value {
+    let mut out = toml::map::Map::new();
+    let Some(table) = val.as_table() else {
+        return toml::Value::Table(out);
+    };
+    for (key, v) in table {
+        match key.as_str() {
+            "command" | "args" | "env" | "url" | "cwd" => {
+                out.insert(key.clone(), v.clone());
+            }
+            "headers" => {
+                out.insert("http_headers".into(), v.clone());
+            }
+            // Transport hint for Claude; Codex infers it from command vs url.
+            "type" => {}
+            // Handled below as overrides.
+            "codex" => {}
+            other => {
+                eprintln!(
+                    "maudebox: mcp.{name}: dropping field '{other}' for Codex \
+                     (unsupported; put Codex-only keys under [mcp.{name}.codex])"
+                );
+            }
+        }
+    }
+    if let Some(overrides) = table.get("codex").and_then(|v| v.as_table()) {
+        for (key, v) in overrides {
+            out.insert(key.clone(), v.clone());
+        }
+    }
+    toml::Value::Table(out)
 }
 
 // Encode a host path into Claude's auto-memory directory key: replace '/' and
@@ -443,5 +626,79 @@ extern "C" {
     fn libc_getuid() -> u32;
     #[link_name = "getgid"]
     fn libc_getgid() -> u32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(toml_src: &str) -> toml::Value {
+        toml::from_str(toml_src).unwrap()
+    }
+
+    #[test]
+    fn stdio_server_maps_common_fields() {
+        let v = server("command = \"playwright-mcp\"\nargs = [\"--headless\"]\n[env]\nK = \"V\"\n");
+        let out = translate_mcp_for_codex("pw", &v);
+        let t = out.as_table().unwrap();
+        assert_eq!(t["command"].as_str(), Some("playwright-mcp"));
+        assert_eq!(t["args"].as_array().unwrap().len(), 1);
+        assert_eq!(t["env"].as_table().unwrap()["K"].as_str(), Some("V"));
+    }
+
+    #[test]
+    fn http_server_drops_type_and_renames_headers() {
+        let v = server("type = \"http\"\nurl = \"https://x\"\n[headers]\nX = \"y\"\n");
+        let out = translate_mcp_for_codex("gh", &v);
+        let t = out.as_table().unwrap();
+        assert_eq!(t["url"].as_str(), Some("https://x"));
+        // `type` is dropped (Codex infers transport), `headers` -> `http_headers`.
+        assert!(!t.contains_key("type"));
+        assert!(!t.contains_key("headers"));
+        assert_eq!(t["http_headers"].as_table().unwrap()["X"].as_str(), Some("y"));
+    }
+
+    #[test]
+    fn codex_subtable_overrides_and_adds() {
+        let v = server(
+            "type = \"http\"\nurl = \"https://x\"\n[codex]\nbearer_token_env_var = \"TOK\"\nurl = \"https://override\"\n",
+        );
+        let out = translate_mcp_for_codex("gh", &v);
+        let t = out.as_table().unwrap();
+        // Codex-only key passes through; the sub-table wins on conflicts.
+        assert_eq!(t["bearer_token_env_var"].as_str(), Some("TOK"));
+        assert_eq!(t["url"].as_str(), Some("https://override"));
+        // The reserved sub-table is not itself emitted as a field.
+        assert!(!t.contains_key("codex"));
+    }
+
+    #[test]
+    fn hostname_sanitizes_common_handles() {
+        assert_eq!(sanitize_hostname("trino"), "trino");
+        assert_eq!(sanitize_hostname("trino-review"), "trino-review");
+        // dots/underscores/caps -> hyphens, collapsed, lowercased.
+        assert_eq!(sanitize_hostname("Trino.Lateral"), "trino-lateral");
+        assert_eq!(sanitize_hostname("my_proj..x"), "my-proj-x");
+        // leading/trailing separators trimmed; all-invalid falls back.
+        assert_eq!(sanitize_hostname("-foo-"), "foo");
+        assert_eq!(sanitize_hostname("..."), "maudebox");
+    }
+
+    #[test]
+    fn hostname_caps_at_63_chars_without_trailing_hyphen() {
+        let long = format!("{}-x", "a".repeat(62)); // 62 a's, hyphen at index 62
+        let h = sanitize_hostname(&long);
+        assert_eq!(h.len(), 62); // truncated to 63 would end in '-', so trimmed
+        assert!(!h.ends_with('-'));
+    }
+
+    #[test]
+    fn strip_reserved_removes_codex_for_claude() {
+        let v = server("command = \"x\"\n[codex]\nbearer_token_env_var = \"TOK\"\n");
+        let stripped = strip_reserved_key(&v, "codex");
+        let t = stripped.as_table().unwrap();
+        assert_eq!(t["command"].as_str(), Some("x"));
+        assert!(!t.contains_key("codex"));
+    }
 }
 

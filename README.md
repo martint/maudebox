@@ -10,6 +10,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 - [Playwright](https://playwright.dev) — the `playwright` CLI with Chromium and its OS dependencies preinstalled, plus the [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) server (`playwright-mcp`) so Claude can drive a browser. Both run under `bun` (no Node.js needed); browsers live in a shared system path, so add an `[mcp.playwright]` table pointing at `playwright-mcp` to wire it into Claude Code
 - `git` and [`jj`](https://github.com/jj-vcs/jj) (Jujutsu VCS)
 - Claude Code CLI
+- [Codex CLI](https://github.com/openai/codex) — OpenAI's coding agent, native binary
 - GitHub CLI (`gh`)
 - `ripgrep`, `jq`, `vim`, `less`, `sudo`, OpenSSH client (`ssh`, `ssh-keygen`, `scp`)
 - `perf` (Linux profiler) — works for userspace profiling out of the box; kernel-mode profiling needs `sudo perf …` or a relaxed host `perf_event_paranoid`
@@ -34,7 +35,7 @@ Maven's local repository (`~/.m2/repository`) is a shared mutable store. When tw
 
 ### Shared logins and global config
 
-As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `skills/`, `plugins/`) is bind-mounted read-only, and login state for Claude and the GitHub CLI — plus any SSH keys you generate inside a container — is kept in a shared persistent Docker volume. Log in once to each inside any container; every future container for any worktree is already logged in.
+As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `skills/`, `plugins/`) and Codex config (`~/.codex/AGENTS.md`, `~/.agents/skills/`) are bind-mounted read-only, and login state for Claude, Codex, and the GitHub CLI — plus any SSH keys you generate inside a container — is kept in a shared persistent Docker volume. Log in once to each inside any container (`claude`, `codex login`, `gh auth login`); every future container for any worktree is already logged in.
 
 ## Prerequisites
 
@@ -56,7 +57,7 @@ cargo xtask all              # both, in one go
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.6 --jj-version 0.43.0 --rust-version 1.96.1 --bun-version 1.3.14 --pnpm-version 11.10.0 --claude-version 2.1.205 --playwright-version 1.61.1 --playwright-mcp-version 0.0.77 --tag maudebox
+cargo xtask image --mvnd-version 1.0.6 --jj-version 0.43.0 --rust-version 1.96.1 --bun-version 1.3.14 --pnpm-version 11.10.0 --claude-version 2.1.205 --codex-version 0.144.1 --playwright-version 1.61.1 --playwright-mcp-version 0.0.77 --tag maudebox
 ```
 
 ## Run
@@ -254,9 +255,21 @@ command = "playwright-mcp"
 args = ["--headless", "--no-sandbox"]
 ```
 
-`maudebox` serializes the table to `$XDG_STATE_HOME/maudebox/managed-mcp.json` on each launch and bind-mounts it read-only at `/etc/claude-code/managed-mcp.json` inside the container. Claude Code reads that path as **managed scope**, so every session loads these servers automatically — they show up in `claude mcp list` and don't need `claude mcp add`. The field set inside each `[mcp.NAME]` table is passed through verbatim (validation is Claude's job); see Claude Code's MCP docs for the available fields (`type`, `url`, `command`, `args`, `env`, `headers`, …).
+A single `[mcp.NAME]` table drives **both** bundled agents. For Claude Code, `maudebox` serializes the tables to `$XDG_STATE_HOME/maudebox/managed-mcp.json` and bind-mounts them read-only at `/etc/claude-code/managed-mcp.json` (**managed scope** — every session loads them, they show up in `claude mcp list`, no `claude mcp add` needed). The field set is passed through verbatim (validation is Claude's job); see Claude Code's MCP docs for the fields (`type`, `url`, `command`, `args`, `env`, `headers`, …).
 
-To reach a server running on the host, use `host.docker.internal` as shown above (see *Reaching host services*). Remove or comment out the table to drop the server — the file isn't written when no `[mcp.*]` tables are present, and managed scope is read-only inside the container (users can't disable an entry via `claude mcp remove`).
+For Codex, the same tables are translated into `[mcp_servers.NAME]` entries in `/etc/codex/config.toml` (Codex's lowest-precedence **system** config layer). Codex spells MCP config differently — no `type` field (transport is inferred from `command` vs `url`), `headers` is `http_headers`, and unknown fields are rejected — so the translation maps the fields the two agents share (`command`, `args`, `env`, `url`, `cwd`, and `headers` → `http_headers`) and drops `type`. Anything else prints a warning and is dropped. For Codex-only keys (e.g. `bearer_token_env_var`, `startup_timeout_sec`), add a per-server `[mcp.NAME.codex]` sub-table — its keys are passed through to Codex verbatim and override the translated ones, and it's stripped from Claude's config:
+
+```toml
+[mcp.github]
+type = "http"                       # used by Claude, dropped for Codex
+url  = "https://api.example.com/mcp"
+headers = { X-Env = "prod" }        # -> http_headers for Codex
+
+[mcp.github.codex]                   # Codex-only extras/overrides
+bearer_token_env_var = "GITHUB_TOKEN"
+```
+
+To reach a server running on the host, use `host.docker.internal` as shown above (see *Reaching host services*). Remove or comment out the table to drop the server — the Claude file isn't written when no `[mcp.*]` tables are present (the Codex system config is always written, since it also carries the sandbox default below), and managed scope is read-only inside the container (users can't disable an entry via `claude mcp remove`).
 
 Verify inside the container with `claude mcp list` — managed entries are loaded automatically:
 
@@ -267,6 +280,12 @@ my_stdio: python -m my_server (stdio) - ✓ Connected
 ```
 
 Edits to the user config only take effect for **new** containers; an already-running container keeps using the snapshot of the file it was launched with. Exit and relaunch `maudebox` to pick up changes.
+
+### Codex
+
+`codex` runs inside the same isolated container as `claude`. Because the container already *is* the sandbox (see *Sandboxed execution* above), `maudebox` writes `sandbox_mode = "danger-full-access"` and `approval_policy = "never"` into the low-precedence `/etc/codex/config.toml` so Codex doesn't layer its own Landlock sandbox and approval prompts on top — the same reasoning behind `IS_SANDBOX=1` for Claude. This is the lowest config layer, so your own `~/.codex/config.toml` (persisted in the state volume) can tighten it back up if you prefer. Log in once with `codex login` inside any container; the login persists across all of them. Global instructions go in `~/.codex/AGENTS.md` on the host (bind-mounted read-only); per-project instructions in an `AGENTS.md` at the project root.
+
+**Remote control.** Codex is installed as the official installer's "standalone" layout (not a bare binary) specifically so `codex remote-control start` works — that daemon requires the standalone install, and it's what lets the ChatGPT app (mobile, web, desktop) drive a session running in the container. It's an outbound websocket to OpenAI's cloud (authenticated by your `codex login`), so nothing needs publishing. Pair once with `codex remote-control pair`; the enrollment persists in the shared state volume, so afterwards `codex remote-control start` alone re-enrolls. The container hostname is set to `$MAUDEBOX_INSTANCE`, so a paired worktree shows up under its handle (e.g. `trino-review`) in your device list rather than a random container ID. To also attach a local terminal to the same session, run `codex --remote unix://` in another pane. (Unlike Claude's single `--remote-control` flag, Codex splits this into a daemon plus attached frontends.)
 
 ### Spawning a new workspace or worktree
 
@@ -350,11 +369,14 @@ maudebox-overlay-<basename>-<8-char-hash>
 
 ### Login state and global config
 
-A shared Docker volume `maudebox-state` holds writable state across containers, with three isolated subtrees mounted at the canonical paths each tool expects:
+A shared Docker volume `maudebox-state` holds writable state across containers, with four isolated subtrees mounted at the canonical paths each tool expects:
 
 - `claude/` → `/root/.claude` (Claude login, plugin caches)
+- `codex/` → `/root/.codex` (Codex login, `config.toml`, sessions, state DB — `$CODEX_HOME`)
 - `gh/` → `/root/.config/gh` (`gh auth` token, config)
 - `ssh/` → `/root/.ssh` (SSH keys, `known_hosts`)
+
+The `codex/` subtree is `$CODEX_HOME`, where Codex keeps everything including its SQLite state DB. That DB opens in WAL mode with a busy timeout, and the named volume is VM-local (not virtiofs), so concurrent containers share it as safely as concurrent Codex sessions on one host. Unlike Claude, Codex keeps its login token inside `$CODEX_HOME`, so no symlink is needed — the subtree persists the login directly.
 
 The `ssh/` subtree is a **container-only** `~/.ssh`, distinct from the host's (which is never mounted). It starts empty; generate a key inside any container with `ssh-keygen` — or add one however you like — and every future container, for any worktree, reuses it. The entrypoint resets the directory to mode `0700` on each launch so OpenSSH accepts it.
 
@@ -367,6 +389,8 @@ On top of the `claude/` subtree, the following items from the host's `~/.claude/
 - `plugins/`
 
 Items that are keyed to host paths or are session-only state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`) are intentionally **not** mounted.
+
+Codex's equivalents are bind-mounted read-only too (only if they exist on the host): `~/.codex/AGENTS.md` (your global instructions — Codex's `CLAUDE.md`-equivalent, and also its memory, since Codex has no separate memory store) and `~/.agents/skills/`. Per-project instructions live in an `AGENTS.md` at the project root, which is already inside the bind-mounted worktree, so nothing extra is needed for those.
 
 `~/.claude.json` (Claude's login token and project state) lives outside `~/.claude/`, so the entrypoint symlinks it into the persistent volume:
 

@@ -16,6 +16,7 @@ const DEFAULT_RUST_VERSION: &str = "1.96.1";
 const DEFAULT_BUN_VERSION: &str = "1.3.14";
 const DEFAULT_PNPM_VERSION: &str = "11.10.0";
 const DEFAULT_CLAUDE_VERSION: &str = "2.1.205";
+const DEFAULT_CODEX_VERSION: &str = "0.144.1";
 const DEFAULT_PLAYWRIGHT_VERSION: &str = "1.61.1";
 const DEFAULT_PLAYWRIGHT_MCP_VERSION: &str = "0.0.77";
 const DEFAULT_TAG: &str = "maudebox";
@@ -35,6 +36,7 @@ Options for `image` and `all`:
   --bun-version VERSION     default: 1.3.14
   --pnpm-version VERSION    default: 11.10.0
   --claude-version VERSION  default: 2.1.205
+  --codex-version VERSION   default: 0.144.1
   --playwright-version VERSION      default: 1.61.1
   --playwright-mcp-version VERSION  default: 0.0.77
   --tag TAG                 default: maudebox
@@ -76,6 +78,7 @@ struct ImageOpts {
     bun_version: String,
     pnpm_version: String,
     claude_version: String,
+    codex_version: String,
     playwright_version: String,
     playwright_mcp_version: String,
     tag: String,
@@ -89,6 +92,7 @@ fn parse_image_opts(args: &[String]) -> Result<ImageOpts, String> {
         bun_version: DEFAULT_BUN_VERSION.into(),
         pnpm_version: DEFAULT_PNPM_VERSION.into(),
         claude_version: DEFAULT_CLAUDE_VERSION.into(),
+        codex_version: DEFAULT_CODEX_VERSION.into(),
         playwright_version: DEFAULT_PLAYWRIGHT_VERSION.into(),
         playwright_mcp_version: DEFAULT_PLAYWRIGHT_MCP_VERSION.into(),
         tag: DEFAULT_TAG.into(),
@@ -125,6 +129,10 @@ fn parse_image_opts(args: &[String]) -> Result<ImageOpts, String> {
             }
             "--claude-version" => {
                 opts.claude_version = val()?;
+                i += 2;
+            }
+            "--codex-version" => {
+                opts.codex_version = val()?;
                 i += 2;
             }
             "--playwright-version" => {
@@ -181,6 +189,7 @@ fn build_image(opts: &ImageOpts) -> Result<i32, String> {
     println!("    bun    : {}", opts.bun_version);
     println!("    pnpm   : {}", opts.pnpm_version);
     println!("    claude : {}", opts.claude_version);
+    println!("    codex  : {}", opts.codex_version);
     println!("    pw     : {}", opts.playwright_version);
     println!("    pw-mcp : {}", opts.playwright_mcp_version);
     let status = Command::new("docker")
@@ -197,6 +206,8 @@ fn build_image(opts: &ImageOpts) -> Result<i32, String> {
         .arg(format!("PNPM_VERSION={}", opts.pnpm_version))
         .arg("--build-arg")
         .arg(format!("CLAUDE_VERSION={}", opts.claude_version))
+        .arg("--build-arg")
+        .arg(format!("CODEX_VERSION={}", opts.codex_version))
         .arg("--build-arg")
         .arg(format!("PLAYWRIGHT_VERSION={}", opts.playwright_version))
         .arg("--build-arg")

@@ -7,6 +7,7 @@ ARG RUST_VERSION=1.96.1
 ARG BUN_VERSION=1.3.14
 ARG PNPM_VERSION=11.10.0
 ARG CLAUDE_VERSION=2.1.205
+ARG CODEX_VERSION=0.144.1
 ARG PLAYWRIGHT_VERSION=1.61.1
 ARG PLAYWRIGHT_MCP_VERSION=0.0.77
 
@@ -45,6 +46,13 @@ ENV PATH=/root/.local/bin:$PATH
 # container *is* the sandbox here (see the "Container runs as root" notes),
 # so set it unconditionally.
 ENV IS_SANDBOX=1
+
+# Codex keeps all of its per-user state — auth.json, config.toml, sessions,
+# and the SQLite state DB — under $CODEX_HOME (default ~/.codex). maudebox
+# mounts a maudebox-state subpath there, so point CODEX_HOME at it explicitly.
+# Codex hard-errors if CODEX_HOME is set to a path that doesn't exist, so the
+# dir is created at build time too (covers a bare `docker run` with no volume).
+ENV CODEX_HOME=/root/.codex
 
 # Host gitconfig is bind-mounted read-only by the maudebox wrapper, so the user's identity
 # and aliases work inside the container. But the host's commit.gpgsign=true
@@ -114,6 +122,14 @@ RUN echo 'host ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/host \
 # when no MCP servers are configured (the wrapper just skips the mount).
 RUN mkdir -p /etc/claude-code
 
+# Codex reads /etc/codex/config.toml as its lowest-precedence "system" config
+# layer. The maudebox wrapper materializes it from the user's config.toml
+# [mcp.NAME] tables (translated to Codex's [mcp_servers.NAME] shape) plus a
+# sandbox default, and bind-mounts it there; the user's own ~/.codex/config.toml
+# still overrides it. Pre-create /etc/codex so the mount target's parent exists,
+# and /root/.codex so $CODEX_HOME resolves even without the state-volume mount.
+RUN mkdir -p /etc/codex /root/.codex
+
 # ── mvnd ──────────────────────────────────────────────────────────────────────
 # Detect host arch so the image builds on both amd64 and arm64
 RUN set -eux; \
@@ -145,6 +161,41 @@ RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLAUDE_VERSION" \
  && chmod a+rx /usr/local/bin/claude \
  && rm -rf "$HOME/.local/share/claude" "$HOME/.claude" \
  && ln -sf /usr/local/bin/claude "$HOME/.local/bin/claude"
+
+# ── Codex (installer-managed "standalone" layout) ────────────────────────────
+# `codex remote-control start` — the daemon that lets the ChatGPT app (and a
+# local `codex --remote` TUI) drive a session — refuses to run against a plain
+# binary. It requires the standalone install the official installer lays down at
+# $CODEX_HOME/packages/standalone/current/codex, because it starts (and updates)
+# the app-server from that fixed path. Reproduce that layout from the release
+# "package" bundle, which also carries the vendored bwrap and rg codex expects
+# (so the daemon's sandbox helper is present without an apt install).
+#
+# Stage it under /opt, outside the maudebox-state volume: $CODEX_HOME is a volume
+# subpath that starts empty at runtime, so a build-time install there would be
+# shadowed by the mount. The entrypoint symlinks the volume-backed
+# $CODEX_HOME/packages/standalone/current at this /opt release on first launch —
+# a symlink, not a ~336 MB copy into the volume. The interactive `codex` on PATH
+# is the same standalone binary; `current` is version-agnostic so an image
+# rebuild with a new CODEX_VERSION is picked up without touching the volume.
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+        x86_64)  CODEX_TARGET="x86_64-unknown-linux-musl"  ;; \
+        aarch64) CODEX_TARGET="aarch64-unknown-linux-musl" ;; \
+        *)       echo "Unsupported arch: $ARCH" && exit 1 ;; \
+    esac; \
+    REL="/opt/codex/packages/standalone/releases/${CODEX_VERSION}-${CODEX_TARGET}"; \
+    mkdir -p "$REL"; \
+    curl -fsSL \
+        "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-package-${CODEX_TARGET}.tar.gz" \
+        -o /tmp/codex-package.tar.gz \
+    && tar -xzf /tmp/codex-package.tar.gz -C "$REL" \
+    && rm /tmp/codex-package.tar.gz \
+    && ln -sf bin/codex "$REL/codex" \
+    && ln -sf "releases/${CODEX_VERSION}-${CODEX_TARGET}" /opt/codex/packages/standalone/current \
+    && chmod -R a+rX /opt/codex \
+    && ln -sf /opt/codex/packages/standalone/current/codex /usr/local/bin/codex
 
 # ── jujutsu ───────────────────────────────────────────────────────────────────
 # Use musl binaries: statically linked, no libc version dependency
