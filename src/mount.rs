@@ -114,3 +114,39 @@ pub fn build_mount_plan(specs: &[String]) -> Result<MountPlan> {
     }
     Ok(plan)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_modes_and_defaults_to_rw() {
+        assert_eq!(parse_mount_spec("/a:/b").unwrap().mode, Mode::Rw);
+        assert_eq!(parse_mount_spec("/a:/b:ro").unwrap().mode, Mode::Ro);
+        assert_eq!(
+            parse_mount_spec("/a:/b:overlay").unwrap().mode,
+            Mode::Overlay
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_specs() {
+        for spec in ["/a", ":/b", "/a:", "/a:/b:nope", "/a:/b:rw:extra"] {
+            assert!(parse_mount_spec(spec).is_err(), "accepted {spec}");
+        }
+    }
+
+    #[test]
+    fn canonical_key_normalizes_default_mode() {
+        assert_eq!(mount_spec_key("~/a:~/b"), mount_spec_key("~/a:~/b:rw"));
+    }
+
+    #[test]
+    fn duplicate_overlay_targets_are_rejected() {
+        let specs = vec!["/a:/cache:overlay".into(), "/b:/cache:overlay".into()];
+        assert!(build_mount_plan(&specs)
+            .unwrap_err()
+            .to_string()
+            .contains("Duplicate"));
+    }
+}

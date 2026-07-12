@@ -186,7 +186,15 @@ fn dispatch(cli: Cli) -> Result<i32> {
             let first = it.next().unwrap_or_else(|| ".".to_string());
             let inner: Vec<String> = it.collect();
             let project_dir = resolve::resolve_project(&first)?;
-            default_run(tag, memory_from, mount, instance, network, project_dir, inner)
+            default_run(
+                tag,
+                memory_from,
+                mount,
+                instance,
+                network,
+                project_dir,
+                inner,
+            )
         }
         Some(Command::List) => cmd::list::run(),
         Some(Command::Rm { target }) => cmd::rm::run(&target),
@@ -217,4 +225,41 @@ fn default_run(
         project_dir,
         command,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_command_preserves_hyphenated_inner_arguments() {
+        let cli = Cli::try_parse_from(["maudebox", ".", "cargo", "test", "--locked"]).unwrap();
+        match cli.command {
+            Some(Command::Default(args)) => {
+                assert_eq!(args, [".", "cargo", "test", "--locked"])
+            }
+            _ => panic!("expected default command"),
+        }
+    }
+
+    #[test]
+    fn new_command_parses_ephemeral_and_trailing_command() {
+        let cli = Cli::try_parse_from([
+            "maudebox",
+            "new",
+            "feature",
+            "--ephemeral",
+            "cargo",
+            "test",
+            "--locked",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::New(args)) => {
+                assert!(args.ephemeral);
+                assert_eq!(args.command, ["cargo", "test", "--locked"]);
+            }
+            _ => panic!("expected new command"),
+        }
+    }
 }

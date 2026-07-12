@@ -122,8 +122,16 @@ pub fn run() -> Result<i32> {
     let mut keys: Vec<(String, String)> = volumes
         .iter()
         .map(|v| (v.project.clone(), v.instance.clone()))
-        .chain(running.iter().map(|r| (r.project.clone(), r.instance.clone())))
-        .chain(manifests.iter().map(|m| (m.project.clone(), m.instance.clone())))
+        .chain(
+            running
+                .iter()
+                .map(|r| (r.project.clone(), r.instance.clone())),
+        )
+        .chain(
+            manifests
+                .iter()
+                .map(|m| (m.project.clone(), m.instance.clone())),
+        )
         .filter(|(p, _)| !p.is_empty())
         .collect();
     keys.sort();
@@ -166,13 +174,25 @@ pub fn run() -> Result<i32> {
             }
         }
 
-        let id_disp = if id.is_empty() { "-".to_string() } else { id.clone() };
+        let id_disp = if id.is_empty() {
+            "-".to_string()
+        } else {
+            id.clone()
+        };
         let status = if id.is_empty() { "stopped" } else { "running" };
         rows.push(vec![
             id_disp,
             status.into(),
-            if instance.is_empty() { "?".into() } else { instance },
-            if ephemeral.is_empty() { "-".into() } else { ephemeral },
+            if instance.is_empty() {
+                "?".into()
+            } else {
+                instance
+            },
+            if ephemeral.is_empty() {
+                "-".into()
+            } else {
+                ephemeral
+            },
             overlays.to_string(),
             project.clone(),
         ]);

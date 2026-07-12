@@ -55,8 +55,7 @@ pub fn manifest_path(state_dir: &Path) -> PathBuf {
 }
 
 pub fn write(state_dir: &Path, manifest: &Manifest) -> Result<()> {
-    fs::create_dir_all(state_dir)
-        .with_context(|| format!("creating {}", state_dir.display()))?;
+    fs::create_dir_all(state_dir).with_context(|| format!("creating {}", state_dir.display()))?;
     let path = manifest_path(state_dir);
     let body = toml::to_string_pretty(manifest).context("serializing manifest")?;
     fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
@@ -67,8 +66,8 @@ pub fn read(state_dir: &Path) -> Result<Option<Manifest>> {
     let path = manifest_path(state_dir);
     match fs::read_to_string(&path) {
         Ok(s) => {
-            let m: Manifest = toml::from_str(&s)
-                .with_context(|| format!("parsing {}", path.display()))?;
+            let m: Manifest =
+                toml::from_str(&s).with_context(|| format!("parsing {}", path.display()))?;
             Ok(Some(m))
         }
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
@@ -149,8 +148,7 @@ mod tests {
     // Pre-target-field manifests should still load; the field defaults to "".
     #[test]
     fn manifest_legacy_no_target_field() {
-        let tmp = env::temp_dir()
-            .join(format!("maudebox-manifest-legacy-{}", std::process::id()));
+        let tmp = env::temp_dir().join(format!("maudebox-manifest-legacy-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         let legacy = r#"kind = "git"

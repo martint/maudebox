@@ -142,9 +142,13 @@ RUN set -eux; \
     curl -fsSL \
         "https://downloads.apache.org/maven/mvnd/${MVND_VERSION}/maven-mvnd-${MVND_VERSION}-${MVND_ARCH}.zip" \
         -o /tmp/mvnd.zip \
+    && curl -fsSL \
+        "https://downloads.apache.org/maven/mvnd/${MVND_VERSION}/maven-mvnd-${MVND_VERSION}-${MVND_ARCH}.zip.sha512" \
+        -o /tmp/mvnd.zip.sha512 \
+    && (cd /tmp && awk '{print $1 "  mvnd.zip"}' mvnd.zip.sha512 | sha512sum -c -) \
     && unzip /tmp/mvnd.zip -d /opt \
     && mv "/opt/maven-mvnd-${MVND_VERSION}-${MVND_ARCH}" /opt/mvnd \
-    && rm /tmp/mvnd.zip \
+    && rm /tmp/mvnd.zip /tmp/mvnd.zip.sha512 \
     && ln -s /opt/mvnd/bin/mvnd /usr/local/bin/mvnd \
     && ln -s /opt/mvnd/bin/mvnd /usr/local/bin/mvn
 
@@ -154,7 +158,9 @@ RUN set -eux; \
 # real binary to /usr/local/bin so it lives outside any volume mount path,
 # then re-point the launcher symlink at it: the native binary records its
 # installMethod and warns at runtime if ~/.local/bin/claude is missing.
-RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLAUDE_VERSION" \
+RUN curl --proto '=https' --tlsv1.2 -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
+ && bash /tmp/install-claude.sh "$CLAUDE_VERSION" \
+ && rm /tmp/install-claude.sh \
  && CLAUDE_LINK="$(ls "$HOME/.local/bin/claude" "$HOME/.claude/bin/claude" 2>/dev/null | head -1)" \
  && CLAUDE_BIN="$(readlink -f "$CLAUDE_LINK")" \
  && mv "$CLAUDE_BIN" /usr/local/bin/claude \
@@ -209,6 +215,10 @@ RUN set -eux; \
     curl -fsSL \
         "https://github.com/jj-vcs/jj/releases/download/v${JJ_VERSION}/jj-v${JJ_VERSION}-${JJ_ARCH}.tar.gz" \
         -o /tmp/jj.tar.gz \
+    && EXPECTED="$(curl -fsSL "https://api.github.com/repos/jj-vcs/jj/releases/tags/v${JJ_VERSION}" \
+        | jq -r --arg name "jj-v${JJ_VERSION}-${JJ_ARCH}.tar.gz" '.assets[] | select(.name == $name) | .digest | sub("^sha256:"; "")')" \
+    && test -n "$EXPECTED" && test "$EXPECTED" != null \
+    && echo "$EXPECTED  /tmp/jj.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/jj.tar.gz -C /usr/local/bin ./jj \
     && chmod +x /usr/local/bin/jj \
     && rm /tmp/jj.tar.gz
@@ -236,13 +246,17 @@ RUN set -eux; \
     curl --proto '=https' --tlsv1.2 -fsSL \
         "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${RUST_ARCH}/rustup-init" \
         -o /tmp/rustup-init \
+    && curl --proto '=https' --tlsv1.2 -fsSL \
+        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${RUST_ARCH}/rustup-init.sha256" \
+        -o /tmp/rustup-init.sha256 \
+    && (cd /tmp && awk '{print $1 "  rustup-init"}' rustup-init.sha256 | sha256sum -c -) \
     && chmod +x /tmp/rustup-init \
     && /tmp/rustup-init -y \
         --no-modify-path \
         --profile minimal \
         --default-toolchain "${RUST_VERSION}" \
         --default-host "${RUST_ARCH}" \
-    && rm /tmp/rustup-init \
+    && rm /tmp/rustup-init /tmp/rustup-init.sha256 \
     && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"
 
 # ── bun ──────────────────────────────────────────────────────────────────────
@@ -259,9 +273,13 @@ RUN set -eux; \
     curl -fsSL \
         "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${BUN_ARCH}.zip" \
         -o /tmp/bun.zip \
+    && curl -fsSL \
+        "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt" \
+        -o /tmp/bun-shasums.txt \
+    && (cd /tmp && grep "  bun-linux-${BUN_ARCH}.zip$" bun-shasums.txt | awk '{print $1 "  bun.zip"}' | sha256sum -c -) \
     && unzip -j /tmp/bun.zip "bun-linux-${BUN_ARCH}/bun" -d /usr/local/bin \
     && chmod +x /usr/local/bin/bun \
-    && rm /tmp/bun.zip
+    && rm /tmp/bun.zip /tmp/bun-shasums.txt
 
 # ── pnpm ─────────────────────────────────────────────────────────────────────
 # pnpm 11 ships a small native launcher plus a `dist/` tree of JS the launcher
@@ -278,6 +296,10 @@ RUN set -eux; \
     && curl -fsSL \
         "https://github.com/pnpm/pnpm/releases/download/v${PNPM_VERSION}/pnpm-linux-${PNPM_ARCH}.tar.gz" \
         -o /tmp/pnpm.tar.gz \
+    && EXPECTED="$(curl -fsSL "https://api.github.com/repos/pnpm/pnpm/releases/tags/v${PNPM_VERSION}" \
+        | jq -r --arg name "pnpm-linux-${PNPM_ARCH}.tar.gz" '.assets[] | select(.name == $name) | .digest | sub("^sha256:"; "")')" \
+    && test -n "$EXPECTED" && test "$EXPECTED" != null \
+    && echo "$EXPECTED  /tmp/pnpm.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/pnpm.tar.gz -C /opt/pnpm \
     && rm /tmp/pnpm.tar.gz \
     && ln -s /opt/pnpm/pnpm /usr/local/bin/pnpm

@@ -54,6 +54,8 @@ cargo xtask image            # docker image (defaults: mvnd 1.0.6, jj 0.43.0, ta
 cargo xtask all              # both, in one go
 ```
 
+Downloaded mvnd, jj, rustup, bun, and pnpm artifacts are checked against their publishers' SHA-256/SHA-512 metadata before extraction. The Claude installer is downloaded over TLS to a file before execution; its upstream distribution currently does not publish a separate checksum through this build interface.
+
 Version pins and tag can be overridden:
 
 ```sh
@@ -91,6 +93,8 @@ maudebox --instance review . claude       # MAUDEBOX_INSTANCE=trino-review
 ```
 
 The flag is appended to the project basename, not a full override, so the basename stays a stable prefix. The discriminator also threads into the docker container name and the `maudebox.instance` label, so the two sessions appear as distinct handles to `claude --remote-control` and other tools that key off `$MAUDEBOX_INSTANCE`. Overlay volumes and the per-instance state dir are still keyed only on the project path, so both sessions share Maven cache state — if that's not what you want, use `maudebox new` to spin up a second worktree instead.
+
+The container hostname also matches `$MAUDEBOX_INSTANCE`. Codex's managed app-server runtime directory (`~/.codex/app-server-control`) is mounted from a small Docker volume keyed to the project and instance. Consequently, `codex remote-control start; codex --remote unix://` starts or attaches to that container's own daemon instead of reusing a daemon from another maudebox. Codex auth, configuration, skills, and history outside that runtime directory remain shared normally.
 
 If the project is a **jj workspace** or **git worktree**, `maudebox` reads its metadata (`.jj/repo` for jj, `.git` for git), finds the base repo, and bind-mounts it at its host path too — so the absolute paths recorded inside the worktree resolve correctly and `jj` / `git` commands Just Work.
 
@@ -133,6 +137,8 @@ Two equivalent ways:
   ```
 
 In both cases the spec syntax is `HOST:CONTAINER[:ro|rw|overlay]`. A leading `~` on the host side expands to `$HOME` (your host home); on the container side it expands to `/root` (the container's home, fixed by the entrypoint). Mode defaults to `rw`. CLI mounts are forwarded to the inner instance when used with `maudebox new`.
+
+Configuration is type-checked when it is read. Keys such as `mounts`, `project-roots`, and `default-command` must be arrays of strings; `network` must be a string or an array of strings; alias values must be strings. Invalid values stop the launch with the key and array index instead of being silently ignored.
 
 **Overlay mode** layers a per-worktree writable Docker volume over the read-only host source, giving each worktree isolated writes while sharing the host content as warm starting state — handy for `~/.m2` (Maven), `~/.cargo`, `~/.gradle`, `~/.npm`, etc. Repeat with different targets to set up multiple overlays in one container; each one creates its own per-worktree volume.
 
@@ -421,6 +427,8 @@ docker rmi maudebox                 # remove the image
 - `Cargo.toml`, `src/` — the host-side `maudebox` wrapper (single binary, no runtime deps).
 - `xtask/` — small Rust helper crate wired in as `cargo xtask`. Drives `docker build` (and, for `all`, also `cargo build --release`).
 - `.cargo/config.toml` — defines the `xtask` alias so `cargo xtask <subcommand>` works.
+- `rust-toolchain.toml` — pins the development toolchain and installs `rustfmt` and Clippy.
+- `.github/workflows/ci.yml` — formatting, Clippy, tests, ShellCheck, and Docker image build checks.
 - `docker/` — everything the image is built from:
     - `Dockerfile` — image definition.
     - `entrypoint.sh` — overlayfs setup, UID drop on Linux, Claude state symlink, then `exec` the user command.

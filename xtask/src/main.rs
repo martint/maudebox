@@ -55,7 +55,7 @@ fn main() -> ExitCode {
 
 fn run(args: &[String]) -> Result<i32, String> {
     let sub = args.first().map(String::as_str).unwrap_or("help");
-    let rest = &args.get(1..).unwrap_or(&[][..])[..];
+    let rest = args.get(1..).unwrap_or(&[][..]);
     match sub {
         "image" => cmd_image(rest),
         "all" => cmd_all(rest),

@@ -79,7 +79,9 @@ pub fn run(action: AliasAction) -> Result<i32> {
 // Same regex shape as bash: ^[a-zA-Z_][a-zA-Z0-9_-]*$
 fn is_valid_name(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !(first.is_ascii_alphabetic() || first == '_') {
         return false;
     }

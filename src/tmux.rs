@@ -49,7 +49,11 @@ impl WindowName {
     /// `$TMUX` is unset (not inside tmux).
     pub fn apply(name: &str) -> Self {
         if std::env::var_os("TMUX").is_none() {
-            return Self { active: false, prev_name: None, prev_auto_on: false };
+            return Self {
+                active: false,
+                prev_name: None,
+                prev_auto_on: false,
+            };
         }
         let prev_name = tmux_capture(&["display-message", "-p", "#{window_name}"]);
         let prev_auto_on = tmux_capture(&["display-message", "-p", "#{automatic-rename}"])
@@ -58,7 +62,11 @@ impl WindowName {
         // rename-window sets the name *and* sets automatic-rename off for the
         // window, which is exactly what keeps the name from snapping back.
         let active = tmux(&["rename-window", name]);
-        Self { active, prev_name, prev_auto_on }
+        Self {
+            active,
+            prev_name,
+            prev_auto_on,
+        }
     }
 }
 

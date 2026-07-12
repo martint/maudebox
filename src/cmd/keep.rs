@@ -9,13 +9,7 @@ use std::path::PathBuf;
 pub fn run(target: &str) -> Result<i32> {
     let fmt = "{{.ID}}\t{{.Label \"maudebox.instance\"}}\t{{.Label \"maudebox.ephemeral-name\"}}\t{{.Label \"maudebox.ephemeral\"}}\t{{.Label \"maudebox.state-dir\"}}\t{{.Label \"maudebox.project\"}}";
 
-    let out = docker::capture(&[
-        "ps",
-        "--filter",
-        "label=maudebox.instance",
-        "--format",
-        fmt,
-    ])?;
+    let out = docker::capture(&["ps", "--filter", "label=maudebox.instance", "--format", fmt])?;
 
     struct Match {
         id: String,
@@ -57,7 +51,10 @@ pub fn run(target: &str) -> Result<i32> {
 
     let m = &matches[0];
     if m.ephemeral != "true" {
-        println!("Instance '{}' is not ephemeral; nothing to keep.", m.instance);
+        println!(
+            "Instance '{}' is not ephemeral; nothing to keep.",
+            m.instance
+        );
         return Ok(0);
     }
     if m.state_dir.is_empty() {

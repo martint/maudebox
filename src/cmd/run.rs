@@ -5,7 +5,7 @@ use crate::docker;
 use crate::mount::{build_mount_plan, MountPlan};
 use crate::paths::{canonicalize, home, xdg_state_home, STATE_VOLUME};
 use crate::vcs::detect_vcs_base;
-use crate::volume::{compute_overlay_volume, compute_state_dir};
+use crate::volume::{compute_codex_daemon_volume, compute_overlay_volume, compute_state_dir};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
@@ -62,14 +62,18 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     ];
     let h = home()?;
     let host_claude_dir = h.join(".claude");
-    for p in ["CLAUDE.md", "settings.json", "agents", "commands", "skills", "plugins"] {
+    for p in [
+        "CLAUDE.md",
+        "settings.json",
+        "agents",
+        "commands",
+        "skills",
+        "plugins",
+    ] {
         let host_path = host_claude_dir.join(p);
         if host_path.exists() {
             claude_mounts.push("-v".into());
-            claude_mounts.push(format!(
-                "{}:/root/.claude/{p}:ro",
-                host_path.display()
-            ));
+            claude_mounts.push(format!("{}:/root/.claude/{p}:ro", host_path.display()));
         }
     }
 
@@ -114,12 +118,18 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     let codex_agents_md = h.join(".codex").join("AGENTS.md");
     if codex_agents_md.exists() {
         codex_mounts.push("-v".into());
-        codex_mounts.push(format!("{}:/root/.codex/AGENTS.md:ro", codex_agents_md.display()));
+        codex_mounts.push(format!(
+            "{}:/root/.codex/AGENTS.md:ro",
+            codex_agents_md.display()
+        ));
     }
     let codex_skills = h.join(".agents").join("skills");
     if codex_skills.exists() {
         codex_mounts.push("-v".into());
-        codex_mounts.push(format!("{}:/root/.agents/skills:ro", codex_skills.display()));
+        codex_mounts.push(format!(
+            "{}:/root/.agents/skills:ro",
+            codex_skills.display()
+        ));
     }
 
     // ── host VCS config (read-only) ────────────────────────────────────────
@@ -133,8 +143,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     }
     if git_config_dir.exists() {
         vcs_config_mounts.push("-v".into());
-        vcs_config_mounts
-            .push(format!("{}:/root/.config/git:ro", git_config_dir.display()));
+        vcs_config_mounts.push(format!("{}:/root/.config/git:ro", git_config_dir.display()));
     }
     if jj_config.exists() {
         vcs_config_mounts.push("-v".into());
@@ -227,6 +236,13 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         .iter()
         .flat_map(|l| ["--label".to_string(), l.clone()])
         .collect();
+
+    let codex_daemon_volume = compute_codex_daemon_volume(&project_dir, &instance_name);
+    docker::ensure_volume(&codex_daemon_volume, &label_strs)?;
+    let codex_daemon_mount = vec![
+        "-v".to_string(),
+        format!("{codex_daemon_volume}:/root/.codex/app-server-control"),
+    ];
 
     // ── overlay volumes + entrypoint env ───────────────────────────────────
     let mut overlay_args: Vec<String> = Vec::new();
@@ -337,10 +353,6 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         instance_name.clone(),
         "--hostname".into(),
         sanitize_hostname(&instance_name),
-        "--cap-add".into(),
-        "SYS_ADMIN".into(),
-        "--security-opt".into(),
-        "apparmor=unconfined".into(),
         "--add-host".into(),
         "host.docker.internal:host-gateway".into(),
         "-e".into(),
@@ -348,6 +360,14 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         "-e".into(),
         format!("MAUDEBOX_INSTANCE={instance_name}"),
     ];
+    if !overlays.is_empty() {
+        args.extend([
+            "--cap-add".into(),
+            "SYS_ADMIN".into(),
+            "--security-opt".into(),
+            "apparmor=unconfined".into(),
+        ]);
+    }
     args.extend(network_args);
     args.extend(user_env);
     args.extend(term_env);
@@ -359,6 +379,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     args.extend(project_mounts);
     args.extend(claude_mounts);
     args.extend(codex_mounts);
+    args.extend(codex_daemon_mount);
     args.extend(managed_mcp_mount);
     args.extend(vcs_config_mounts);
     args.extend(extra_mount_args);
@@ -429,7 +450,10 @@ fn resolve_alias(command: Vec<String>) -> Result<Vec<String>> {
         return Ok(command);
     }
     let aliases = read_aliases()?;
-    let value = aliases.iter().find(|(n, _)| n == first).map(|(_, v)| v.clone());
+    let value = aliases
+        .iter()
+        .find(|(n, _)| n == first)
+        .map(|(_, v)| v.clone());
     let Some(value) = value else {
         return Ok(command);
     };
@@ -445,7 +469,9 @@ fn resolve_alias(command: Vec<String>) -> Result<Vec<String>> {
 
 fn is_valid_alias_name(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !(first.is_ascii_alphabetic() || first == '_') {
         return false;
     }
@@ -473,8 +499,8 @@ fn write_managed_mcp_json(
         // Drop the reserved `codex` sub-table (Codex-only overrides) so it
         // doesn't leak into Claude's mcpServers entry as an unknown field.
         let val = strip_reserved_key(val, "codex");
-        let json_val: serde_json::Value = serde_json::to_value(&val)
-            .with_context(|| format!("converting mcp.{name} to JSON"))?;
+        let json_val: serde_json::Value =
+            serde_json::to_value(&val).with_context(|| format!("converting mcp.{name} to JSON"))?;
         inner.insert(name.clone(), json_val);
     }
     root.insert("mcpServers".to_string(), serde_json::Value::Object(inner));
@@ -540,8 +566,8 @@ fn write_codex_config_toml(
         table.insert("mcp_servers".into(), toml::Value::Table(mcp));
         // The only top-level key here is the `mcp_servers` table, so there is
         // no value-after-table ordering hazard in the TOML serializer.
-        let servers_toml = toml::to_string(&toml::Value::Table(table))
-            .context("serializing Codex mcp_servers")?;
+        let servers_toml =
+            toml::to_string(&toml::Value::Table(table)).context("serializing Codex mcp_servers")?;
         out.push('\n');
         out.push_str(&servers_toml);
     }
@@ -597,7 +623,7 @@ fn translate_mcp_for_codex(name: &str, val: &toml::Value) -> toml::Value {
 // host path, so cwd canonicalizes the same on both sides — host and
 // container agree on the key.
 fn encode_project_key(p: &str) -> String {
-    p.replace('/', "-").replace('.', "-")
+    p.replace(['/', '.'], "-")
 }
 
 #[cfg(unix)]
@@ -655,7 +681,10 @@ mod tests {
         // `type` is dropped (Codex infers transport), `headers` -> `http_headers`.
         assert!(!t.contains_key("type"));
         assert!(!t.contains_key("headers"));
-        assert_eq!(t["http_headers"].as_table().unwrap()["X"].as_str(), Some("y"));
+        assert_eq!(
+            t["http_headers"].as_table().unwrap()["X"].as_str(),
+            Some("y")
+        );
     }
 
     #[test]
@@ -701,4 +730,3 @@ mod tests {
         assert!(!t.contains_key("codex"));
     }
 }
-

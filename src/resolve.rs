@@ -65,3 +65,15 @@ pub fn resolve_project(input: &str) -> Result<String> {
     // 3. Fall through to the literal input.
     Ok(input.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_shaped_inputs_bypass_name_lookup() {
+        for input in [".", "../repo", "/src/repo", "~/repo", "group/repo"] {
+            assert_eq!(resolve_project(input).unwrap(), input);
+        }
+    }
+}

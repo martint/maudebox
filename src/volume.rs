@@ -35,6 +35,21 @@ pub fn compute_overlay_volume(project_dir: &Path, container_target: &str) -> Str
     )
 }
 
+// Codex's managed app-server stores its daemon socket and pid state below
+// `$CODEX_HOME/app-server-control`. Keep that small runtime directory isolated
+// per maudebox instance while allowing the rest of `$CODEX_HOME` (auth, config,
+// skills, and history) to remain shared.
+pub fn compute_codex_daemon_volume(project_dir: &Path, instance: &str) -> String {
+    let basename = project_dir
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!(
+        "maudebox-codex-{basename}-{instance}-{}",
+        sha256_prefix(&project_dir.to_string_lossy())
+    )
+}
+
 // Per-instance state dir on the host. Bind-mounted at /run/maudebox inside
 // the container for ephemeral instances so `maudebox-keep` (or host-side
 // `maudebox keep`) can drop a flag the cleanup trap reads after exit.
@@ -62,6 +77,10 @@ mod tests {
         assert_eq!(
             compute_overlay_volume(p, "/root/.m2"),
             "maudebox-overlay-myproject-6b166a34-fee00b7a"
+        );
+        assert_eq!(
+            compute_codex_daemon_volume(p, "myproject-review"),
+            "maudebox-codex-myproject-myproject-review-6b166a34"
         );
     }
 

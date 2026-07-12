@@ -23,9 +23,9 @@ pub fn run(target: &str) -> Result<i32> {
     let state_dir = compute_state_dir(&project_dir)?;
 
     // Manifest present → maudebox created the worktree; tear it down.
-    let manifest_opt = manifest::read(&state_dir).unwrap_or(None);
+    let manifest_opt = manifest::read(&state_dir)?;
     if let Some(m) = &manifest_opt {
-        tear_down_workspace(m, &project_dir);
+        tear_down_workspace(m, &project_dir)?;
     }
 
     // Overlay volumes (matched by label rather than name suffix, so a manual
@@ -35,7 +35,7 @@ pub fn run(target: &str) -> Result<i32> {
         .unwrap_or_default();
     let volumes: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
     for v in &volumes {
-        let _ = docker::capture(&["volume", "rm", v]);
+        docker::capture(&["volume", "rm", v])?;
         println!("Removed volume: {v}");
     }
 
@@ -93,7 +93,11 @@ fn lookup_by_volume_label(name: &str) -> Result<Vec<String>> {
         "--format",
         fmt,
     ])?;
-    let mut out_paths: Vec<String> = Vec::new();
+    Ok(parse_volume_matches(&out, name))
+}
+
+fn parse_volume_matches(out: &str, name: &str) -> Vec<String> {
+    let mut out_paths = Vec::new();
     for line in out.lines() {
         let mut it = line.split('\t');
         let instance = it.next().unwrap_or("");
@@ -102,19 +106,17 @@ fn lookup_by_volume_label(name: &str) -> Result<Vec<String>> {
             out_paths.push(project.to_string());
         }
     }
-    Ok(out_paths)
+    out_paths
 }
 
 fn lookup_by_container_label(name: &str) -> Result<Vec<String>> {
     let fmt = "{{.ID}}\t{{.Label \"maudebox.instance\"}}\t{{.Label \"maudebox.ephemeral-name\"}}\t{{.Label \"maudebox.project\"}}";
-    let out = docker::capture(&[
-        "ps",
-        "--filter",
-        "label=maudebox.instance",
-        "--format",
-        fmt,
-    ])?;
-    let mut out_paths: Vec<String> = Vec::new();
+    let out = docker::capture(&["ps", "--filter", "label=maudebox.instance", "--format", fmt])?;
+    Ok(parse_container_matches(&out, name))
+}
+
+fn parse_container_matches(out: &str, name: &str) -> Vec<String> {
+    let mut out_paths = Vec::new();
     for line in out.lines() {
         let mut it = line.split('\t');
         let id = it.next().unwrap_or("");
@@ -128,10 +130,10 @@ fn lookup_by_container_label(name: &str) -> Result<Vec<String>> {
             out_paths.push(project.to_string());
         }
     }
-    Ok(out_paths)
+    out_paths
 }
 
-fn tear_down_workspace(m: &Manifest, target: &Path) {
+fn tear_down_workspace(m: &Manifest, target: &Path) -> Result<()> {
     let source = Path::new(&m.source);
     let kind = m.kind;
     println!(
@@ -142,19 +144,20 @@ fn tear_down_workspace(m: &Manifest, target: &Path) {
     );
     match kind {
         WorkspaceKind::Jj => {
-            let _ = run_in(source, "jj", &["workspace", "forget", &m.name]);
-            let _ = fs::remove_dir_all(target);
+            run_in(source, "jj", &["workspace", "forget", &m.name])?;
+            fs::remove_dir_all(target).with_context(|| format!("removing {}", target.display()))?;
         }
         WorkspaceKind::Git => {
             let target_str = target.display().to_string();
-            let _ = run_in(
+            run_in(
                 source,
                 "git",
                 &["worktree", "remove", "--force", &target_str],
-            );
-            let _ = run_in(source, "git", &["branch", "-D", &m.name]);
+            )?;
+            run_in(source, "git", &["branch", "-D", &m.name])?;
         }
     }
+    Ok(())
 }
 
 fn run_in(cwd: &Path, cmd: &str, args: &[&str]) -> Result<()> {
@@ -167,4 +170,23 @@ fn run_in(cwd: &Path, cmd: &str, args: &[&str]) -> Result<()> {
         bail!("{cmd} {} failed (exit {})", args.join(" "), status);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn volume_selection_matches_instance_and_deduplicates_paths() {
+        let input = "one\t/src/a\none\t/src/a\ntwo\t/src/b\n";
+        assert_eq!(parse_volume_matches(input, "one"), vec!["/src/a"]);
+    }
+
+    #[test]
+    fn container_selection_accepts_id_instance_or_ephemeral_name() {
+        let input = "abc123\trepo\tfeature\t/src/a\ndef456\tother\tscratch\t/src/b\n";
+        assert_eq!(parse_container_matches(input, "abc123"), vec!["/src/a"]);
+        assert_eq!(parse_container_matches(input, "repo"), vec!["/src/a"]);
+        assert_eq!(parse_container_matches(input, "scratch"), vec!["/src/b"]);
+    }
 }

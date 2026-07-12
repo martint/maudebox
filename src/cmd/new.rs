@@ -1,5 +1,5 @@
-use crate::cmd::run::{run as run_cmd, RunOptions};
 use crate::cmd::rm;
+use crate::cmd::run::{run as run_cmd, RunOptions};
 use crate::manifest::{self, Manifest, WorkspaceKind};
 use crate::resolve::resolve_project;
 use crate::vcs;
@@ -40,7 +40,11 @@ pub struct NewArgs {
     pub ephemeral: bool,
 
     /// Command to run inside the new workspace (default: interactive shell).
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "COMMAND")]
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        value_name = "COMMAND"
+    )]
     pub command: Vec<String>,
 }
 
@@ -190,7 +194,11 @@ pub fn run(
         memory_from: source.display().to_string(),
         extra_mounts,
         instance: discriminator,
-        ephemeral_name: if ephemeral { name.clone() } else { String::new() },
+        ephemeral_name: if ephemeral {
+            name.clone()
+        } else {
+            String::new()
+        },
         network,
         project_dir: target.display().to_string(),
         command: inner_cmd,
@@ -214,7 +222,10 @@ fn ephemeral_cleanup(target: &Path) -> Result<()> {
     let state_dir = compute_state_dir(target)?;
     let keep = state_dir.join("keep");
     if keep.exists() {
-        println!("Keep flag set; preserving workspace at: {}", target.display());
+        println!(
+            "Keep flag set; preserving workspace at: {}",
+            target.display()
+        );
         let _ = std::fs::remove_file(&keep);
         return Ok(());
     }

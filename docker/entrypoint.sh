@@ -181,7 +181,7 @@ if [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ] && [ "$HOST_UID" != "0" ]; t
     # launch so it always recurses — cheap, since -xdev keeps it on the small
     # container rootfs and off the volume submounts underneath it.
     shopt -s nullglob
-    for d in /maudebox/overlay-*/upper /root/.claude /root/.codex /root/.config/gh /root/.ssh /root; do
+    for d in /maudebox/overlay-*/upper /root/.claude /root/.codex /root/.codex/app-server-control /root/.config/gh /root/.ssh /root; do
         [ -e "$d" ] || continue
         [ "$(stat -c %u "$d" 2>/dev/null)" = "$HOST_UID" ] && continue
         find "$d" -xdev \! -uid "$HOST_UID" \

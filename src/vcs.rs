@@ -39,9 +39,7 @@ fn detect_jj_base(dir: &Path) -> Option<PathBuf> {
 
     // target is <main>/.jj/repo; the working tree is two levels up.
     let target_str = target.to_string_lossy();
-    let base = target_str
-        .strip_suffix("/.jj/repo")
-        .unwrap_or(&target_str);
+    let base = target_str.strip_suffix("/.jj/repo").unwrap_or(&target_str);
     if base.is_empty() || Path::new(base) == target || Path::new(base) == dir {
         return None;
     }
@@ -104,7 +102,12 @@ fn git_default_branch(repo: &Path) -> Result<String> {
     // origin/HEAD records the remote's default branch as of clone time.
     if let Some(short) = git_capture(
         repo,
-        &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
     )? {
         return Ok(short); // already in `origin/<branch>` form
     }
@@ -155,4 +158,44 @@ fn git_ok(repo: &Path, args: &[&str]) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("maudebox-vcs-{label}-{nonce}"));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn detects_absolute_git_worktree_base() {
+        let root = temp_dir("git");
+        let base = root.join("main");
+        let worktree = root.join("worktree");
+        fs::create_dir_all(base.join(".git/worktrees/feature")).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+        fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}/.git/worktrees/feature\n", base.display()),
+        )
+        .unwrap();
+        assert_eq!(detect_vcs_base(&worktree), Some(base));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn regular_checkout_has_no_extra_base() {
+        let root = temp_dir("regular");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        assert_eq!(detect_vcs_base(&root), None);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

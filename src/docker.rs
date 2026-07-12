@@ -46,16 +46,10 @@ pub fn ensure_volume(name: &str, labels: &[String]) -> Result<()> {
 // One-shot mkdir inside a throwaway container so volume-subpath mounts have
 // the expected sub-directory structure on first use.
 pub fn ensure_subpaths(image: &str, volume: &str, subpaths: &[&str]) -> Result<()> {
-    let mut args: Vec<String> = [
-        "run",
-        "--rm",
-        "--entrypoint",
-        "mkdir",
-        "-v",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
+    let mut args: Vec<String> = ["run", "--rm", "--entrypoint", "mkdir", "-v"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     args.push(format!("{volume}:/v"));
     args.push(image.to_string());
     args.push("-p".to_string());

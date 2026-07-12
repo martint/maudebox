@@ -1,5 +1,5 @@
 use crate::paths::{config_path, expand_host_tilde};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -17,14 +17,13 @@ pub fn read_mounts() -> Result<Vec<String>> {
     };
     let v: toml::Value =
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    let arr = match v.get("mounts").and_then(|v| v.as_array()) {
-        Some(a) => a,
+    let arr = match v.get("mounts") {
+        Some(v) => v
+            .as_array()
+            .context("`mounts` must be an array of strings")?,
         None => return Ok(Vec::new()),
     };
-    Ok(arr
-        .iter()
-        .filter_map(|x| x.as_str().map(|s| s.to_string()))
-        .collect())
+    string_array(arr, "mounts")
 }
 
 // Directories searched when a bare name is given instead of a path (to
@@ -39,13 +38,15 @@ pub fn read_project_roots() -> Result<Vec<String>> {
     };
     let v: toml::Value =
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    let arr = match v.get("project-roots").and_then(|v| v.as_array()) {
-        Some(a) => a,
+    let arr = match v.get("project-roots") {
+        Some(v) => v
+            .as_array()
+            .context("`project-roots` must be an array of strings")?,
         None => return Ok(Vec::new()),
     };
-    arr.iter()
-        .filter_map(|x| x.as_str())
-        .map(expand_host_tilde)
+    string_array(arr, "project-roots")?
+        .iter()
+        .map(|s| expand_host_tilde(s))
         .collect()
 }
 
@@ -65,8 +66,8 @@ pub fn read_mcp_servers() -> Result<Option<std::collections::BTreeMap<String, to
     };
     let v: toml::Value =
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    let table = match v.get("mcp").and_then(|v| v.as_table()) {
-        Some(t) => t,
+    let table = match v.get("mcp") {
+        Some(v) => v.as_table().context("`mcp` must be a table")?,
         None => return Ok(None),
     };
     if table.is_empty() {
@@ -88,19 +89,34 @@ pub fn read_aliases() -> Result<Vec<(String, String)>> {
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).context(format!("reading {}", path.display())),
     };
-    let v: toml::Value = toml::from_str(&text)
-        .with_context(|| format!("parsing {}", path.display()))?;
-    let table = match v.get("aliases").and_then(|v| v.as_table()) {
-        Some(t) => t,
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let table = match v.get("aliases") {
+        Some(v) => v.as_table().context("`aliases` must be a table")?,
         None => return Ok(Vec::new()),
     };
     let mut out: Vec<(String, String)> = Vec::with_capacity(table.len());
     for (k, val) in table {
-        if let Some(s) = val.as_str() {
-            out.push((k.clone(), s.to_string()));
+        if !valid_alias_name(k) {
+            bail!(
+                "invalid alias name `{k}`: expected a letter or '_' followed by letters, digits, '_', or '-'"
+            );
         }
+        let s = val
+            .as_str()
+            .with_context(|| format!("`aliases.{k}` must be a string"))?;
+        out.push((k.clone(), s.to_string()));
     }
     Ok(out)
+}
+
+fn valid_alias_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 // The container command launched when none is given on the CLI — applies
@@ -116,14 +132,13 @@ pub fn read_default_command() -> Result<Vec<String>> {
     };
     let v: toml::Value =
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    let arr = match v.get("default-command").and_then(|v| v.as_array()) {
-        Some(a) => a,
+    let arr = match v.get("default-command") {
+        Some(v) => v
+            .as_array()
+            .context("`default-command` must be an array of strings")?,
         None => return Ok(Vec::new()),
     };
-    Ok(arr
-        .iter()
-        .filter_map(|x| x.as_str().map(|s| s.to_string()))
-        .collect())
+    string_array(arr, "default-command")
 }
 
 /// Read the optional `network` key — one or more Docker network names that
@@ -144,12 +159,22 @@ pub fn read_network() -> Result<Vec<String>> {
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     Ok(match v.get("network") {
         Some(toml::Value::String(s)) => vec![s.clone()],
-        Some(toml::Value::Array(a)) => a
-            .iter()
-            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-            .collect(),
-        _ => Vec::new(),
+        Some(toml::Value::Array(a)) => string_array(a, "network")?,
+        Some(_) => bail!("`network` must be a string or an array of strings"),
+        None => Vec::new(),
     })
+}
+
+fn string_array(arr: &[toml::Value], key: &str) -> Result<Vec<String>> {
+    arr.iter()
+        .enumerate()
+        .map(|(i, value)| {
+            value
+                .as_str()
+                .map(ToOwned::to_owned)
+                .with_context(|| format!("`{key}[{i}]` must be a string"))
+        })
+        .collect()
 }
 
 fn emit_mounts_block(specs: &[String]) -> String {
@@ -158,7 +183,7 @@ fn emit_mounts_block(specs: &[String]) -> String {
     }
     let mut out = String::from("mounts = [\n");
     for s in specs {
-        out.push_str(&format!("    \"{s}\",\n"));
+        out.push_str(&format!("    \"{}\",\n", escape_toml_string(s)));
     }
     out.push_str("]\n");
     out
@@ -178,16 +203,11 @@ fn emit_aliases_block(entries: &[(String, String)]) -> String {
 
 fn write_atomic(path: &Path, content: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     // Append `.tmp.<pid>` rather than calling `with_extension`, which would
     // replace the existing `.toml` suffix.
-    let tmp = std::path::PathBuf::from(format!(
-        "{}.tmp.{}",
-        path.display(),
-        std::process::id()
-    ));
+    let tmp = std::path::PathBuf::from(format!("{}.tmp.{}", path.display(), std::process::id()));
     fs::write(&tmp, content).with_context(|| format!("writing {}", tmp.display()))?;
     fs::rename(&tmp, path)
         .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
@@ -312,3 +332,28 @@ fn line_starts_assignment(line: &str, key: &str) -> bool {
     rest.starts_with('[')
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mount_block_is_valid_toml_for_quotes_and_backslashes() {
+        let specs = vec![r#"/tmp/a\b:/root/\"quoted\":ro"#.to_string()];
+        let text = emit_mounts_block(&specs);
+        let parsed: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(parsed["mounts"][0].as_str(), Some(specs[0].as_str()));
+    }
+
+    #[test]
+    fn string_array_rejects_non_strings_with_an_index() {
+        let values = vec![toml::Value::String("ok".into()), toml::Value::Integer(2)];
+        let error = string_array(&values, "mounts").unwrap_err().to_string();
+        assert!(error.contains("mounts[1]"));
+    }
+
+    #[test]
+    fn assignment_match_does_not_accept_prefixes() {
+        assert!(line_starts_assignment(" mounts = []", "mounts"));
+        assert!(!line_starts_assignment("mountain = []", "mounts"));
+    }
+}
