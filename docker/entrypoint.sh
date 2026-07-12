@@ -181,6 +181,21 @@ if [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ] && [ "$HOST_UID" != "0" ]; t
     # launch so it always recurses — cheap, since -xdev keeps it on the small
     # container rootfs and off the volume submounts underneath it.
     shopt -s nullglob
+
+    # The auto-memory bind is nested at .claude/projects/<key>/memory.  When
+    # Docker prepares a new nested mount target, it can create <key> as root
+    # inside the already host-owned .claude volume.  Looking only at the
+    # volume root below would then skip the ownership repair, leaving Claude
+    # unable to create session state alongside memory.  Repair just the two
+    # shallow directory levels on every launch; -xdev does not enter the
+    # host-backed memory mount, and this stays cheap regardless of how much
+    # session history the volume contains.
+    if [ -d /root/.claude/projects ]; then
+        find /root/.claude/projects -xdev -mindepth 0 -maxdepth 1 \
+            \! -uid "$HOST_UID" \
+            -exec chown -h "${HOST_UID}:${HOST_GID}" {} + 2>/dev/null || true
+    fi
+
     for d in /maudebox/overlay-*/upper /root/.claude /root/.codex /root/.codex/app-server-control /root/.config/gh /root/.ssh /root; do
         [ -e "$d" ] || continue
         [ "$(stat -c %u "$d" 2>/dev/null)" = "$HOST_UID" ] && continue
