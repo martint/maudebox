@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Sourced from /etc/bash.bashrc and ~/.bashrc by the Dockerfile. The host
 # wrapper packs `name=value` lines (one per alias, terminated by newline)
 # into the MAUDEBOX_ALIASES env var; this iterates over them and installs

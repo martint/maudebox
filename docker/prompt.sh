@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Bash prompt: cwd + VCS info (jj change@bookmark, or git branch).
 # Modeled after the host's powerlevel10k prompt_my_jj segment, simplified.
 

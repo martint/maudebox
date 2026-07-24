@@ -34,13 +34,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: bash -n docker/*.sh docker/maudebox-keep
-      - run: shellcheck docker/*.sh docker/maudebox-keep
+      - run: bash -n docker/*.sh docker/maudebox-keep docker/mvnd-wrapper
+      - run: shellcheck docker/*.sh docker/maudebox-keep docker/mvnd-wrapper
 
   docker-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
       - name: Validate Dockerfile and first build stage
         uses: docker/build-push-action@v6
         with:
