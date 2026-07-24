@@ -27,8 +27,7 @@ its base repo, if it's a jj workspace or git worktree) is bind-mounted at \
 its host path inside the container so VCS metadata still resolves. Extra \
 host paths can be exposed via --mount or the user config; any of them can \
 use mode `overlay` to layer a per-worktree writable upper over a read-only \
-host lower (typically used for ~/.m2 to isolate Maven snapshots per \
-worktree without mutating the host cache).";
+host lower. Maven cache sharing and local-install isolation are automatic.";
 
 const EXAMPLES: &str = "Examples:
   maudebox                               # interactive shell in current dir
@@ -39,14 +38,14 @@ const EXAMPLES: &str = "Examples:
   maudebox new feature-x                 # new workspace from cwd (kept on exit)
   maudebox new feature-x --source trino  # new workspace from another project
   maudebox new feature-x --from main     # start from a specific revision
-  maudebox new feature-x --ephemeral     # tear down workspace/overlay on exit
+  maudebox new feature-x --ephemeral     # tear down workspace/volumes on exit
   maudebox new feature-x mvnd verify     # spawn workspace, run a build in it
   maudebox list                          # list registered maudebox instances
   maudebox keep feature-x                # don't tear down on exit
   maudebox rm feature-x                  # full teardown of an instance
   maudebox rm /path/to/myproject         # remove volumes + state for a path
   maudebox --mount ~/.aws:~/.aws:ro      # bind ~/.aws read-only into the container
-  maudebox mount add ~/.m2:~/.m2:overlay # persist a mount in the user config
+  maudebox mount add ~/.gradle:~/.gradle:overlay # persist an overlay mount
   maudebox alias add cl 'claude --dangerously-skip-permissions --remote-control $MAUDEBOX_INSTANCE'
   maudebox config edit                   # open the user config in $EDITOR
   maudebox config path                   # print the user config path
@@ -114,7 +113,7 @@ enum Command {
     /// List every registered maudebox instance.
     List,
 
-    /// Remove a maudebox-managed instance (workspace, overlay volumes, state dir).
+    /// Remove a maudebox-managed instance (workspace, project volumes, state dir).
     ///
     /// For projects created by `maudebox new`, this also tears down the
     /// jj workspace / git worktree. For paths handed to `maudebox <path>`

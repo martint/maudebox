@@ -1,0 +1,10 @@
+#!/bin/sh
+# Pass the repository layout as Maven user properties on every request. This
+# happens after mvnd has loaded project configuration, so .mvn/mvnd.properties
+# and .mvn/jvm.config cannot accidentally remove the isolation settings.
+exec /opt/mvnd/bin/mvnd \
+    -Daether.enhancedLocalRepository.split=true \
+    -Daether.enhancedLocalRepository.remotePrefix=remote-cache \
+    -Daether.enhancedLocalRepository.localPrefix=local-installs \
+    -Daether.syncContext.named.basedir.locksDir=/root/.m2/repository/remote-cache/.locks \
+    "$@"

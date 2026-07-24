@@ -27,14 +27,14 @@ struct ManifestRow {
 }
 
 // An instance is a `(project, instance-handle)` pair: anything currently
-// running, with at least one overlay volume on disk, OR created by `maudebox
+// running, with at least one project volume on disk, OR created by `maudebox
 // new` (a persisted manifest) shows up. Keying on the pair rather than the
 // project alone keeps `--instance` variants — several containers against one
 // project, distinguished only by their `maudebox.instance` label — as separate
 // rows instead of collapsing them. The three sources are independent: a
-// `new`-created workspace with no overlay mount has no volume, and once its
-// container exits `docker ps` shows nothing, so its manifest is the only record
-// left. The instance handle comes straight from each source's label (the
+// Older `new`-created workspaces may have no volume, and once their container
+// exits `docker ps` shows nothing, so their manifest is the only record left.
+// The instance handle comes straight from each source's label (the
 // manifest reconstructs it from the target basename and recorded discriminator).
 //
 // An ephemeral instance whose keep flag is set is shown as non-ephemeral,
@@ -58,12 +58,11 @@ pub fn run() -> Result<i32> {
         "--format",
         vol_fmt,
     ])?;
-
     let volumes: Vec<VolumeRow> = vol_out
         .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| {
-            let mut it = l.split('\t');
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut it = line.split('\t');
             VolumeRow {
                 project: it.next().unwrap_or("").to_string(),
                 instance: it.next().unwrap_or("").to_string(),

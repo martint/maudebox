@@ -35,7 +35,7 @@ pub struct NewArgs {
     #[arg(long)]
     pub fetch: bool,
 
-    /// Tear down workspace/worktree and overlay volume on container exit.
+    /// Tear down workspace/worktree and project volumes on container exit.
     #[arg(long)]
     pub ephemeral: bool,
 
@@ -51,7 +51,7 @@ pub struct NewArgs {
 // Create a jj workspace or git worktree from a source project and run
 // maudebox on it. By default the workspace persists after the container
 // exits, like `maudebox <path>` does. With --ephemeral, the workspace and
-// its overlay volume are torn down on exit. jj is preferred when both .jj
+// its project volumes are torn down on exit. jj is preferred when both .jj
 // and .git are present (colocated repos).
 pub fn run(
     args: NewArgs,

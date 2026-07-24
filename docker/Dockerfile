@@ -16,14 +16,26 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.78
 # Linux bind mounts pass UIDs through literally, so root-in-container writes
 # would otherwise land as root on the host. macOS/OrbStack stays root for the
 # whole session because virtiofs is root-squashed (host user appears as uid=0)
-# and lowerdir-uid-preserving overlay copy-up would leave the ~/.m2 upperdir
+# and lowerdir-uid-preserving overlay copy-up would leave an overlay upperdir
 # unwritable for any non-root user. See CLAUDE.md for the full story.
 # Either way $HOME stays /root and that's where everything lives — claude
 # config, the Maven cache mount, the project bind-mount.
 
-# mvnd's daemon registry and logs default to ~/.m2/mvnd. Keep mvnd state
-# out of the overlay so its small writes don't trigger pointless copy-up.
+# Keep mvnd's daemon registry and logs separate from the Maven repository
+# mounts; the state is container-local and does not need cache persistence.
 ENV MVND_DAEMON_STORAGE=/root/.mvnd
+
+# Maven Resolver's split local-repository layout routes remotely downloaded
+# artifacts below remote-cache/ and `mvn install` output below local-installs/.
+# At runtime maudebox bind-mounts the host's ~/.m2/repository RW only at
+# remote-cache; local-installs stays in the ephemeral container layer. Put
+# Resolver locks inside that shared bind so host and container Maven coordinate.
+# MAVEN_OPTS covers conventional Maven and mvnw. The mvnd launcher copied below
+# passes the same values as Maven user properties on every request, after
+# project-level mvnd/JVM configuration has been loaded.
+ENV MAVEN_OPTS="-Daether.enhancedLocalRepository.split=true -Daether.enhancedLocalRepository.remotePrefix=remote-cache -Daether.enhancedLocalRepository.localPrefix=local-installs -Daether.syncContext.named.basedir.locksDir=/root/.m2/repository/remote-cache/.locks"
+
+COPY --chmod=0755 mvnd-wrapper /usr/local/bin/mvnd
 
 # `less` parses $LESS in addition to argv, so this makes any `less` invocation
 # (including pagers hard-coded as `less -FX` in the user's mounted jj/git
@@ -149,8 +161,7 @@ RUN set -eux; \
     && unzip /tmp/mvnd.zip -d /opt \
     && mv "/opt/maven-mvnd-${MVND_VERSION}-${MVND_ARCH}" /opt/mvnd \
     && rm /tmp/mvnd.zip /tmp/mvnd.zip.sha512 \
-    && ln -s /opt/mvnd/bin/mvnd /usr/local/bin/mvnd \
-    && ln -s /opt/mvnd/bin/mvnd /usr/local/bin/mvn
+    && ln -s /usr/local/bin/mvnd /usr/local/bin/mvn
 
 # ── Claude Code (native binary, no Node.js required) ─────────────────────────
 # The installer drops a launcher symlink in ~/.local/bin/claude pointing into

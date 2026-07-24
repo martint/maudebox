@@ -2,11 +2,11 @@ use crate::config::{
     read_aliases, read_default_command, read_mcp_servers, read_mounts, read_network,
 };
 use crate::docker;
-use crate::mount::{build_mount_plan, MountPlan};
-use crate::paths::{canonicalize, home, xdg_state_home, STATE_VOLUME};
+use crate::mount::{build_mount_plan, parse_mount_spec, Mode, MountPlan};
+use crate::paths::{canonicalize, expand_container_tilde, home, xdg_state_home, STATE_VOLUME};
 use crate::vcs::detect_vcs_base;
 use crate::volume::{compute_codex_daemon_volume, compute_overlay_volume, compute_state_dir};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
@@ -187,6 +187,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     // ── extra mounts (CLI --mount + config-file mounts) ────────────────────
     let mut all_specs = opts.extra_mounts.clone();
     all_specs.extend(read_mounts()?);
+    reject_maven_mount_conflicts(&all_specs)?;
     let MountPlan {
         mount_args: extra_mount_args,
         overlays,
@@ -242,6 +243,28 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     let codex_daemon_mount = vec![
         "-v".to_string(),
         format!("{codex_daemon_volume}:/root/.codex/app-server-control"),
+    ];
+
+    // ── Maven split local repository ───────────────────────────────────────
+    // Resolver is configured in the image with remotePrefix=remote-cache and
+    // localPrefix=local-installs. Bind the host repository only at the remote
+    // prefix; the repository root and local-installs remain in the container's
+    // writable layer and disappear with `docker run --rm`. Resolver's lock
+    // directory is explicitly placed inside remote-cache so host Maven and all
+    // containers coordinate writes to the shared cache.
+    let host_maven_repository = h.join(".m2").join("repository");
+    fs::create_dir_all(&host_maven_repository).with_context(|| {
+        format!(
+            "creating Maven repository {}",
+            host_maven_repository.display()
+        )
+    })?;
+    let maven_mounts = vec![
+        "--mount".to_string(),
+        format!(
+            "type=bind,src={},dst=/root/.m2/repository/remote-cache",
+            host_maven_repository.display()
+        ),
     ];
 
     // ── overlay volumes + entrypoint env ───────────────────────────────────
@@ -309,6 +332,10 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     for o in &overlays {
         println!("Overlay  : {} -> {}", o.host_src, o.container_dst);
     }
+    println!(
+        "Maven    : {} -> /root/.m2/repository/remote-cache (shared rw)",
+        host_maven_repository.display()
+    );
 
     // ── network ────────────────────────────────────────────────────────────
     // Join one or more user-defined Docker networks (e.g. a compose project's
@@ -380,6 +407,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     args.extend(claude_mounts);
     args.extend(codex_mounts);
     args.extend(codex_daemon_mount);
+    args.extend(maven_mounts);
     args.extend(managed_mcp_mount);
     args.extend(vcs_config_mounts);
     args.extend(extra_mount_args);
@@ -393,6 +421,29 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     let _tmux_window = crate::tmux::WindowName::apply(&instance_name);
 
     docker::run_inherit(&args)
+}
+
+fn reject_maven_mount_conflicts(specs: &[String]) -> Result<()> {
+    for spec in specs {
+        let mount = parse_mount_spec(spec)?;
+        let destination = expand_container_tilde(&mount.dst);
+        let target = std::path::Path::new(&destination);
+        let repository = std::path::Path::new("/root/.m2/repository");
+        let remote_cache = repository.join("remote-cache");
+        let conflicts = match mount.mode {
+            Mode::Overlay => repository.starts_with(target) || target.starts_with(repository),
+            Mode::Ro | Mode::Rw => repository.starts_with(target) || target == remote_cache,
+        };
+        if conflicts {
+            bail!(
+                "Mount target '{destination}' conflicts with maudebox's built-in Maven repository \
+                 mounts. Remove the ~/.m2 repository mount from maudebox config (for the old \
+                 default, run `maudebox mount rm ~/.m2:~/.m2:overlay`); third-party artifacts are \
+                 now shared RW and local installs are isolated automatically."
+            );
+        }
+    }
+    Ok(())
 }
 
 // Build the instance handle from a project basename and the `--instance`
@@ -719,6 +770,28 @@ mod tests {
         let h = sanitize_hostname(&long);
         assert_eq!(h.len(), 62); // truncated to 63 would end in '-', so trimmed
         assert!(!h.ends_with('-'));
+    }
+
+    #[test]
+    fn rejects_mounts_that_collide_with_builtin_maven_layout() {
+        for spec in [
+            "~/.m2:~/.m2:overlay",
+            "/tmp/repo:/root/.m2/repository:rw",
+            "/tmp/cache:/root/.m2/repository/remote-cache:rw",
+        ] {
+            let err = reject_maven_mount_conflicts(&[spec.to_string()]).unwrap_err();
+            assert!(err.to_string().contains("built-in Maven"));
+        }
+    }
+
+    #[test]
+    fn permits_unrelated_and_m2_sibling_mounts() {
+        reject_maven_mount_conflicts(&[
+            "~/.aws:~/.aws:ro".into(),
+            "~/.m2/settings.xml:~/.m2/settings.xml:ro".into(),
+            "~/.gradle:~/.gradle:overlay".into(),
+        ])
+        .unwrap();
     }
 
     #[test]

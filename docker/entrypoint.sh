@@ -173,9 +173,9 @@ if [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ] && [ "$HOST_UID" != "0" ]; t
     # lands host-owned, so the only root-owned entries are the Docker-created
     # volume mount points and the dirs this entrypoint mkdir's as root above,
     # all near the top. After the first launch the root dir is host-owned and a
-    # `find` over the whole tree chowns nothing — but walking a warmed ~/.m2
-    # overlay (100k+ files) or months of accumulated ~/.claude session logs just
-    # to confirm that costs seconds before the prompt. Recurse only when the
+    # `find` over the whole tree chowns nothing — but walking months of
+    # accumulated ~/.claude session logs just to confirm that costs seconds
+    # before the prompt. Recurse only when the
     # root isn't host-owned yet, which is exactly first launch when the tree is
     # still empty/tiny. /root itself is reset to root-ownership by every --rm
     # launch so it always recurses — cheap, since -xdev keeps it on the small

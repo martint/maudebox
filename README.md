@@ -23,7 +23,7 @@ Builds natively on amd64 and arm64.
 
 Running Claude Code directly on your host gives it the same access you have: your entire home directory, your SSH keys, your shell history, every other project on disk, and the ability to run anything `$PATH` exposes. That's a lot of blast radius for an agent that may execute commands you didn't read carefully.
 
-`maudebox` runs Claude inside a container that can only see **the project directory you point it at** (and, for jj workspaces and git worktrees, the base repo it depends on). Everything else — `~/.ssh`, `~/.aws`, sibling projects, your shell config, your browser profile — is simply not mounted and not reachable. The container has no host network privileges beyond what Docker grants, no access to your host's package managers, and no way to install daemons on your machine. Claude can run `mvnd verify`, edit files in the project, run tests, and `jj` / `git` commands against that worktree, but it cannot wander out of it.
+`maudebox` runs Claude inside a container that can only see **the project directory you point it at** (and, for jj workspaces and git worktrees, the base repo it depends on), the explicitly configured mounts, and the host's Maven artifact cache at `~/.m2/repository`. Everything else — `~/.ssh`, `~/.aws`, sibling projects, your shell config, your browser profile — is not mounted and is not reachable. The container has no host network privileges beyond what Docker grants, no access to your host's package managers, and no way to install daemons on your machine. Claude can run `mvnd verify`, edit files in the project, run tests, and `jj` / `git` commands against that worktree, but it cannot wander out of those exposed paths.
 
 Auth material is held back deliberately: `~/.ssh`, `~/.git-credentials`, and `~/.gnupg` are **not** mounted, and `commit.gpgsign` / `tag.gpgSign` are forced off inside the container so a host signing config (e.g. 1Password's macOS-only ssh-sign) doesn't either auto-fail every commit or — worse — get exercised against keys the container shouldn't be able to use. The container does get its own separate `~/.ssh`, persisted across maudebox instances but starting empty and never populated from the host — see [Login state and global config](#login-state-and-global-config).
 
@@ -31,7 +31,9 @@ Auth material is held back deliberately: `~/.ssh`, `~/.git-credentials`, and `~/
 
 Maven's local repository (`~/.m2/repository`) is a shared mutable store. When two builds running concurrently both `mvn install` a snapshot under the same coordinates, the last writer wins and the other build silently picks up the wrong artifact. With multiple Claude sessions iterating on different feature branches in different worktrees of the same project, this is a near-constant footgun: session A installs `1.2.3-SNAPSHOT` from its branch, session B's compile then resolves A's jars, and B's "test failure" has nothing to do with B's code.
 
-`maudebox` can give **each worktree its own writable Maven repository layer** via overlayfs — opt in by adding an `overlay` mount in your config (see "Extra bind mounts" below; typically `~/.m2:~/.m2:overlay`). The host source becomes the read-only lower layer, so cached third-party artifacts are shared and warm. The upper layer — where every `install`, every downloaded snapshot, every locally built jar lands — is a Docker named volume keyed to that specific worktree's path. Two concurrent `maudebox` containers on two worktrees of the same repo each see their own `1.2.3-SNAPSHOT`, with zero cross-talk and zero mutation of the host's `~/.m2`.
+`maudebox` configures Maven Resolver's split local-repository layout automatically. The host's `~/.m2/repository` is mounted read-write at the container's `repository/remote-cache/` prefix, so third-party downloads populate one warm cache shared with host Maven without changing the host layout. Resolver routes artifacts produced by `mvn install` into `repository/local-installs/` in the container's writable layer. Two concurrent maudebox containers therefore see their own `1.2.3-SNAPSHOT` installs without duplicating the persistent remote cache or requiring overlayfs; those local installs disappear when each container exits.
+
+The shared cache is intentionally RW: a process in the container can modify or delete third-party artifacts in the host repository. The split layout prevents normal Maven installs from landing there; it is not a security boundary against a malicious process that writes to the mounted path directly. Maven settings and credentials elsewhere under `~/.m2` are not mounted.
 
 ### Shared logins and global config
 
@@ -41,7 +43,7 @@ As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`,
 
 - Docker (tested with OrbStack on macOS; should work with Docker Desktop and native Linux Docker too).
 - A Rust toolchain (stable, 1.75+) to build the wrapper. `cargo` and `rustc` only.
-- A host with `~/.m2` (optional — only used if you add an `overlay` mount for it).
+- A host directory where maudebox can create `~/.m2/repository` if it does not already exist.
 - A host with Claude Code installed (optional — its global config under `~/.claude/` is bind-mounted into the container if present).
 
 ## Build
@@ -116,7 +118,7 @@ With `~/Projects/trino` on disk and `~/Projects` configured as a root, `maudebox
 
 ### Extra bind mounts
 
-By default `maudebox` only sets up the project tree and the Claude/gh state volumes. Any other host path you want exposed inside the container — `~/.m2`, `~/.aws`, a notes directory, a shared cache — is declared explicitly.
+By default `maudebox` sets up the project tree, the Maven repository mounts, and the Claude/gh state volumes. Any other host path you want exposed inside the container — `~/.aws`, a notes directory, another shared cache — is declared explicitly.
 
 Two equivalent ways:
 
@@ -130,9 +132,9 @@ Two equivalent ways:
 
   ```toml
   mounts = [
-      "~/.m2:~/.m2:overlay",
       "~/.aws:~/.aws:ro",
       "~/Documents/notes:~/notes",
+      "~/.gradle:~/.gradle:overlay",
   ]
   ```
 
@@ -140,16 +142,20 @@ In both cases the spec syntax is `HOST:CONTAINER[:ro|rw|overlay]`. A leading `~`
 
 Configuration is type-checked when it is read. Keys such as `mounts`, `project-roots`, and `default-command` must be arrays of strings; `network` must be a string or an array of strings; alias values must be strings. Invalid values stop the launch with the key and array index instead of being silently ignored.
 
-**Overlay mode** layers a per-worktree writable Docker volume over the read-only host source, giving each worktree isolated writes while sharing the host content as warm starting state — handy for `~/.m2` (Maven), `~/.cargo`, `~/.gradle`, `~/.npm`, etc. Repeat with different targets to set up multiple overlays in one container; each one creates its own per-worktree volume.
+**Overlay mode** layers a per-worktree writable Docker volume over the read-only host source, giving each worktree isolated writes while sharing the host content as warm starting state — handy for caches such as `~/.cargo`, `~/.gradle`, and `~/.npm`. Maven no longer needs an overlay: its split repository is built in. An existing `~/.m2:~/.m2:overlay` configuration conflicts with the built-in mounts and must be removed.
+
+```sh
+maudebox mount rm ~/.m2:~/.m2:overlay
+```
 
 #### Managing mounts from the CLI
 
 You can edit `the user config` by hand, but a small subcommand handles the common operations:
 
 ```sh
-maudebox mount add ~/.m2:~/.m2:overlay     # append to the user config
+maudebox mount add ~/.gradle:~/.gradle:overlay # append to the user config
 maudebox mount list                        # print configured specs
-maudebox mount rm  ~/.m2:~/.m2:overlay     # remove an exact-match spec
+maudebox mount rm  ~/.gradle:~/.gradle:overlay # remove an exact-match spec
 ```
 
 `add` is idempotent (a duplicate spec is left as-is). `rm` requires an exact match against what `mount list` shows — copy-paste from `list` rather than retyping. Only the `mounts = [ ... ]` block in `the user config` is rewritten on mutation; comments and any other TOML content elsewhere in the file are preserved verbatim.
@@ -305,7 +311,7 @@ maudebox new feature-x --source trino        # ...from another project (path or 
 maudebox new feature-x --from main           # start from a specific revision
 maudebox new feature-x --fetch               # fetch first, then branch off the default
 maudebox new feature-x --path /tmp/scratch   # custom target path
-maudebox new feature-x --ephemeral           # tear down workspace + overlay on exit
+maudebox new feature-x --ephemeral           # tear down workspace + volumes on exit
 maudebox new feature-x claude                # spawn the workspace, run a command in it
 ```
 
@@ -335,7 +341,7 @@ With `--ephemeral`, the wrapper tears the workspace down once the container exit
 
 - **jj:** runs `jj workspace forget <name>` and `rm -rf <target>`. The change at `@` in that workspace becomes a regular commit in jj's op log, so committed work is recoverable via `jj op log` / `jj op restore`.
 - **git:** runs `git worktree remove --force <target>` and `git branch -D <name>`. Branch tip commits remain reachable via the reflog (default 90 days).
-- **Overlay volume:** the per-worktree `maudebox-overlay-…` volume is removed.
+- **Project volumes:** any `maudebox-overlay-…` volumes and container runtime volumes are removed.
 - **State dir:** the per-instance state dir under `$XDG_STATE_HOME/maudebox/instances/…` is removed last.
 
 Uncommitted working-copy changes are **not** preserved. Commit before exiting the container if you might want them later.
@@ -347,15 +353,28 @@ If you've launched an ephemeral instance and later decide you'd rather hold onto
 - **From inside the container:** run `maudebox-keep`.
 - **From the host:** run `maudebox keep <id-or-name>`, where the argument is the container ID (as shown by `maudebox list`), the instance basename, or the original name passed to `maudebox new`.
 
-Either form drops a `keep` flag in the state dir. On exit, the wrapper sees the flag, removes only the flag itself (the manifest stays in place), and leaves the workspace, overlay volume, and state dir intact — so a later `maudebox rm <name>` still recognizes the workspace as maudebox-managed and can do the full teardown when you really are done with it.
+Either form drops a `keep` flag in the state dir. On exit, the wrapper sees the flag, removes only the flag itself (the manifest stays in place), and leaves the workspace, project volumes, and state dir intact — so a later `maudebox rm <name>` still recognizes the workspace as maudebox-managed and can do the full teardown when you really are done with it.
 
-Either way, when the container exits its workspace and Maven overlay are left in place instead of being deleted. Both are no-ops for non-ephemeral instances. After the container exits, a kept workspace is just a regular jj workspace / git worktree.
+Keeping an ephemeral workspace does not preserve Maven local installs: those live in the individual container's writable layer and disappear whenever that container exits. Both keep forms are no-ops for non-ephemeral instances. After the container exits, a kept workspace is just a regular jj workspace / git worktree.
 
 ## How it works
 
-### Overlay mounts (typically the Maven cache, optionally more)
+### Maven repository
 
-For each mount spec that uses mode `overlay` (e.g. `~/.m2:~/.m2:overlay`), the container gets an overlayfs at the target path with three layers:
+Every container uses this repository layout:
+
+| Container path                                  | Source                                      | Lifetime  |
+| ----------------------------------------------- | ------------------------------------------- | --------- |
+| `/root/.m2/repository/remote-cache`              | host `~/.m2/repository` (RW bind mount)     | persistent |
+| `/root/.m2/repository/local-installs`            | container writable layer                    | container |
+
+The image enables Resolver's enhanced split local repository with `remotePrefix=remote-cache` and `localPrefix=local-installs`. Although the remote prefix is nested inside the container, its bind source is the host repository root, so artifacts retain Maven's conventional host paths. Resolver's lock directory is explicitly placed at `remote-cache/.locks`, which maps to the host's conventional `.locks` directory and coordinates host and container writers. Conventional Maven and Maven Wrapper receive the settings through `MAVEN_OPTS`. The image's `mvnd`/`mvn` launcher also prepends them as Maven user properties to every mvnd request, after project configuration has been loaded; project-level `.mvn/mvnd.properties` and `.mvn/jvm.config` therefore cannot silently disable the split layout.
+
+Local installs disappear automatically with `docker run --rm`; there is no Maven volume for `maudebox rm` to maintain. If Maven is launched with the split settings explicitly disabled, it falls back to the container's repository root and may download an ephemeral duplicate, but it does not write into the host bind mounted at `remote-cache/`.
+
+### Overlay mounts (optional)
+
+For each mount spec that uses mode `overlay` (for example `~/.gradle:~/.gradle:overlay`), the container gets an overlayfs at the target path with three layers:
 
 | Layer    | Source                                                  | Mode |
 | -------- | ------------------------------------------------------- | ---- |
@@ -363,9 +382,9 @@ For each mount spec that uses mode `overlay` (e.g. `~/.m2:~/.m2:overlay`), the c
 | upper    | per-worktree+per-target Docker volume (`maudebox-overlay-…-<target-hash>`) | rw   |
 | workdir  | sibling subdir in the same volume                       | rw   |
 
-Effect: builds inside the container see all the artifacts already cached on the host, but anything they download or `install` lands in a worktree-scoped volume. Concurrent containers for different worktrees don't collide. The host source is never mutated. You can declare more than one — e.g. one for Maven, one for Cargo — and each gets its own per-worktree volume. Without any `overlay` mount declared, no overlay is set up and no volume is created — `maudebox` is just a project bind-mount + state volumes.
+Effect: tools inside the container see the host files as a read-only starting point, but their writes land in a worktree-scoped volume. Concurrent containers for different worktrees do not collide, and the host source is not mutated. You can declare more than one and each gets its own per-worktree volume. Without an `overlay` mount, maudebox does not request `SYS_ADMIN` or disable the AppArmor profile.
 
-`maudebox list` aggregates by project and shows an `OVERLAYS` count column. It surfaces a project that is currently running, has at least one overlay volume on disk, or was created by `maudebox new` (a persisted manifest) — so a `new`-created workspace with no overlay mount still shows up after its container exits. `maudebox rm <id-or-name-or-path>` removes every overlay volume tied to that project, drops the per-instance state dir, and — if the state dir holds a manifest left by `maudebox new` — also tears down the jj workspace / git worktree. A path handed to `maudebox <path>` directly has no manifest, so `rm` leaves the worktree alone and only cleans up what maudebox itself created.
+`maudebox list` aggregates by project and shows an `OVERLAYS` count. It surfaces a project that is currently running, has an overlay volume on disk, or was created by `maudebox new` (a persisted manifest). `maudebox rm <id-or-name-or-path>` removes every project-scoped volume, drops the per-instance state dir, and — if the state dir holds a manifest left by `maudebox new` — also tears down the jj workspace / git worktree. A path handed to `maudebox <path>` directly has no manifest, so `rm` leaves the worktree alone and only cleans up what maudebox itself created.
 
 The per-worktree volume name is derived from the basename of the project directory plus a SHA-256 prefix of its full path:
 
@@ -410,7 +429,7 @@ This means: **log in to Claude Code (and `gh`) once inside any container**, and 
 
 The container runs as **root** (UID 0) on macOS. This is intentional: OrbStack and similar virtiofs setups root-squash the host bind-mounts, so files in the lower layer of an overlay mount appear as `uid=0` inside the container. Overlayfs preserves that UID on copy-up, which means a non-root container user couldn't write to anything pre-existing in the host source. Running as root sidesteps the whole class of "permission denied on file inherited from the host" failures (mvnd registry, Aether lock files, install-plugin tmp files, etc.). On Linux the entrypoint drops privileges to the host UID after the privileged setup steps are done.
 
-Everything lives under `/root`: the Claude config (`/root/.claude`), an opt-in overlay target (typically `/root/.m2`), and a `/root/<basename>` symlink to your worktree's host path. Files written to bind-mounted paths land back on the host owned by your host user, courtesy of virtiofs UID translation (macOS) or the privilege drop (Linux).
+Everything lives under `/root`: the Claude config (`/root/.claude`), the Maven mounts under `/root/.m2/repository`, any opt-in overlay targets, and a `/root/<basename>` symlink to your worktree's host path. Files written to bind-mounted paths land back on the host owned by your host user, courtesy of virtiofs UID translation (macOS) or the privilege drop (Linux).
 
 Because of the Linux privilege drop, in-container privileged operations (`apt-get install`, `mount`, etc.) fail with `Permission denied`. The image installs `sudo` and grants the runtime user passwordless sudo, so the escape hatch is `sudo apt-get install …` (or `sudo -i` for a root shell). The rule is inert on macOS/OrbStack where the session stays root anyway.
 

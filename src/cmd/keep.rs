@@ -69,7 +69,7 @@ pub fn run(target: &str) -> Result<i32> {
     fs::create_dir_all(&dir)?;
     fs::write(dir.join("keep"), "")?;
     println!(
-        "Marked '{}' to keep — workspace and overlay volume will survive when the container exits.",
+        "Marked '{}' to keep — workspace and project volumes will survive when the container exits.",
         m.instance
     );
     Ok(0)

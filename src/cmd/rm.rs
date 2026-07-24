@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-// Remove a maudebox-managed instance: its overlay volumes, its state dir,
+// Remove a maudebox-managed instance: its project volumes, its state dir,
 // and — if the state dir's manifest says maudebox created the worktree —
 // the workspace/worktree itself. For a path that maudebox didn't create
 // (i.e. a project launched via `maudebox <path>`), the worktree is left
@@ -28,8 +28,8 @@ pub fn run(target: &str) -> Result<i32> {
         tear_down_workspace(m, &project_dir)?;
     }
 
-    // Overlay volumes (matched by label rather than name suffix, so a manual
-    // rename or label-only volume still gets picked up).
+    // Project-scoped volumes (overlays and the Codex daemon runtime) are
+    // matched by label rather than name suffix.
     let label = format!("label=maudebox.project={}", project_dir.display());
     let out = docker::capture(&["volume", "ls", "--filter", &label, "--format", "{{.Name}}"])
         .unwrap_or_default();
