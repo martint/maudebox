@@ -42,7 +42,7 @@ __dev_prompt_vcs() {
 # mid-session. Under tmux the iTerm2 tab tracks the window name instead, which
 # the host wrapper sets via `tmux rename-window`.
 __dev_prompt_title() {
-    printf '\033]2;%s\033\\' "${MAUDEBOX_INSTANCE:-maudebox}"
+    printf $'\e]2;%s\e\\' "${MAUDEBOX_INSTANCE:-maudebox}"
 }
 
 PROMPT_COMMAND='__dev_prompt_vcs; __dev_prompt_title'

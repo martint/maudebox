@@ -126,7 +126,7 @@ fi
 # that never draw a bash prompt. Under tmux the window name (set host-side via
 # `tmux rename-window`) is what the tab shows, not this.
 if [ -n "${MAUDEBOX_INSTANCE:-}" ]; then
-    printf '\033]2;%s\033\\' "$MAUDEBOX_INSTANCE"
+    printf $'\e]2;%s\e\\' "$MAUDEBOX_INSTANCE"
 fi
 
 # ── drop privileges (Linux) ───────────────────────────────────────────────────
