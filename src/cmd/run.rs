@@ -387,14 +387,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         "-e".into(),
         format!("MAUDEBOX_INSTANCE={instance_name}"),
     ];
-    if !overlays.is_empty() {
-        args.extend([
-            "--cap-add".into(),
-            "SYS_ADMIN".into(),
-            "--security-opt".into(),
-            "apparmor=unconfined".into(),
-        ]);
-    }
+    args.extend(runtime_privilege_args(!overlays.is_empty()));
     args.extend(network_args);
     args.extend(user_env);
     args.extend(term_env);
@@ -421,6 +414,25 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     let _tmux_window = crate::tmux::WindowName::apply(&instance_name);
 
     docker::run_inherit(&args)
+}
+
+fn runtime_privilege_args(has_overlays: bool) -> Vec<String> {
+    // Docker's default capability set excludes CAP_PERFMON, and its
+    // capability-aware seccomp profile consequently blocks perf_event_open(2).
+    // Add the narrow profiling capability on every launch: after the Linux UID
+    // drop an ordinary user can still profile its own userspace code when the
+    // host's perf_event_paranoid permits it, while `sudo perf` regains
+    // CAP_PERFMON from the container's bounding set for broader profiling.
+    let mut args = vec!["--cap-add".into(), "PERFMON".into()];
+    if has_overlays {
+        args.extend([
+            "--cap-add".into(),
+            "SYS_ADMIN".into(),
+            "--security-opt".into(),
+            "apparmor=unconfined".into(),
+        ]);
+    }
+    args
 }
 
 fn reject_maven_mount_conflicts(specs: &[String]) -> Result<()> {
@@ -770,6 +782,25 @@ mod tests {
         let h = sanitize_hostname(&long);
         assert_eq!(h.len(), 62); // truncated to 63 would end in '-', so trimmed
         assert!(!h.ends_with('-'));
+    }
+
+    #[test]
+    fn perfmon_is_always_added_but_overlay_privileges_are_conditional() {
+        let ordinary = runtime_privilege_args(false);
+        assert_eq!(ordinary, ["--cap-add", "PERFMON"]);
+
+        let overlay = runtime_privilege_args(true);
+        assert_eq!(
+            overlay,
+            [
+                "--cap-add",
+                "PERFMON",
+                "--cap-add",
+                "SYS_ADMIN",
+                "--security-opt",
+                "apparmor=unconfined",
+            ]
+        );
     }
 
     #[test]

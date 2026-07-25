@@ -12,12 +12,12 @@ use std::process::{Command, ExitCode};
 
 const DEFAULT_MVND_VERSION: &str = "1.0.6";
 const DEFAULT_JJ_VERSION: &str = "0.43.0";
-const DEFAULT_RUST_VERSION: &str = "1.97.0";
+const DEFAULT_RUST_VERSION: &str = "1.97.1";
 const DEFAULT_BUN_VERSION: &str = "1.3.14";
-const DEFAULT_PNPM_VERSION: &str = "11.12.0";
-const DEFAULT_CLAUDE_VERSION: &str = "2.1.207";
-const DEFAULT_CODEX_VERSION: &str = "0.144.1";
-const DEFAULT_PLAYWRIGHT_VERSION: &str = "1.61.1";
+const DEFAULT_PNPM_VERSION: &str = "11.17.0";
+const DEFAULT_CLAUDE_VERSION: &str = "2.1.220";
+const DEFAULT_CODEX_VERSION: &str = "0.145.0";
+const DEFAULT_PLAYWRIGHT_VERSION: &str = "1.62.0";
 const DEFAULT_PLAYWRIGHT_MCP_VERSION: &str = "0.0.78";
 const DEFAULT_TAG: &str = "maudebox";
 
@@ -32,12 +32,12 @@ Subcommands:
 Options for `image` and `all`:
   --mvnd-version VERSION    default: 1.0.6
   --jj-version VERSION      default: 0.43.0
-  --rust-version VERSION    default: 1.97.0
+  --rust-version VERSION    default: 1.97.1
   --bun-version VERSION     default: 1.3.14
-  --pnpm-version VERSION    default: 11.12.0
-  --claude-version VERSION  default: 2.1.207
-  --codex-version VERSION   default: 0.144.1
-  --playwright-version VERSION      default: 1.61.1
+  --pnpm-version VERSION    default: 11.17.0
+  --claude-version VERSION  default: 2.1.220
+  --codex-version VERSION   default: 0.145.0
+  --playwright-version VERSION      default: 1.62.0
   --playwright-mcp-version VERSION  default: 0.0.78
   --tag TAG                 default: maudebox
 ";

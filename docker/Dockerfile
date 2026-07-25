@@ -3,12 +3,12 @@ FROM eclipse-temurin:26-jdk-noble
 
 ARG MVND_VERSION=1.0.6
 ARG JJ_VERSION=0.43.0
-ARG RUST_VERSION=1.97.0
+ARG RUST_VERSION=1.97.1
 ARG BUN_VERSION=1.3.14
-ARG PNPM_VERSION=11.12.0
-ARG CLAUDE_VERSION=2.1.207
-ARG CODEX_VERSION=0.144.1
-ARG PLAYWRIGHT_VERSION=1.61.1
+ARG PNPM_VERSION=11.17.0
+ARG CLAUDE_VERSION=2.1.220
+ARG CODEX_VERSION=0.145.0
+ARG PLAYWRIGHT_VERSION=1.62.0
 ARG PLAYWRIGHT_MCP_VERSION=0.0.78
 
 # The container starts as root for the privileged setup (overlay mount, volume
@@ -116,8 +116,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # noble package shipped, so the wrapper bails with "perf not found for kernel".
 # Symlink straight to the bundled binary to bypass the dispatch — perf is
 # forward/backward compatible enough for the common cases (cycles, instructions,
-# userspace stacks). Profiling beyond the host's perf_event_paranoid level needs
-# `sudo perf …` since the Linux entrypoint drops CAP_PERFMON/CAP_SYS_ADMIN.
+# userspace stacks). The host wrapper adds CAP_PERFMON to the container, which
+# also makes Docker's capability-aware seccomp profile admit perf_event_open(2).
+# The Linux entrypoint drops capabilities with the host UID, so profiling beyond
+# the host's perf_event_paranoid level still needs `sudo perf …`.
 RUN ln -sf "$(ls -d /usr/lib/linux-tools/*/perf | head -1)" /usr/local/bin/perf
 
 # On Linux the entrypoint drops to a "host" user at HOST_UID before exec'ing
@@ -253,7 +255,7 @@ RUN set -eux; \
         aarch64) RUST_ARCH="aarch64-unknown-linux-gnu" ;; \
         *)       echo "Unsupported arch: $ARCH" && exit 1 ;; \
     esac; \
-    RUSTUP_VERSION="1.27.1"; \
+    RUSTUP_VERSION="1.29.0"; \
     curl --proto '=https' --tlsv1.2 -fsSL \
         "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${RUST_ARCH}/rustup-init" \
         -o /tmp/rustup-init \

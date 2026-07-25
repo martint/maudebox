@@ -4,7 +4,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 
 - Eclipse Temurin JDK 26
 - [`mvnd`](https://github.com/apache/maven-mvnd) (Maven Daemon) — symlinked as both `mvnd` and `mvn`
-- A Rust toolchain (rustup-managed, default 1.97.0) plus `build-essential` for crates with native dependencies
+- A Rust toolchain (rustup-managed, default 1.97.1) plus `build-essential` for crates with native dependencies
 - Python 3 with `pip`, `venv`, and development headers (`python` is symlinked to `python3`)
 - [`bun`](https://bun.sh) and [`pnpm`](https://pnpm.io) for JavaScript/TypeScript work (pnpm bundles its own Node.js; bun is its own runtime)
 - [Playwright](https://playwright.dev) — the `playwright` CLI with Chromium and its OS dependencies preinstalled, plus the [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) server (`playwright-mcp`) so Claude can drive a browser. Both run under `bun` (no Node.js needed); browsers live in a shared system path, so add an `[mcp.playwright]` table pointing at `playwright-mcp` to wire it into Claude Code
@@ -13,7 +13,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 - [Codex CLI](https://github.com/openai/codex) — OpenAI's coding agent, native binary
 - GitHub CLI (`gh`)
 - `ripgrep`, `jq`, `vim`, `less`, `sudo`, OpenSSH client (`ssh`, `ssh-keygen`, `scp`)
-- `perf` (Linux profiler) — works for userspace profiling out of the box; kernel-mode profiling needs `sudo perf …` or a relaxed host `perf_event_paranoid`
+- `perf` (Linux profiler) — the container receives only the narrow `CAP_PERFMON` profiling capability; userspace profiling works as the regular user, while profiling beyond the host's `perf_event_paranoid` policy needs `sudo perf …`
 
 Builds natively on amd64 and arm64.
 
@@ -61,7 +61,7 @@ Downloaded mvnd, jj, rustup, bun, and pnpm artifacts are checked against their p
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.6 --jj-version 0.43.0 --rust-version 1.97.0 --bun-version 1.3.14 --pnpm-version 11.12.0 --claude-version 2.1.207 --codex-version 0.144.1 --playwright-version 1.61.1 --playwright-mcp-version 0.0.78 --tag maudebox
+cargo xtask image --mvnd-version 1.0.6 --jj-version 0.43.0 --rust-version 1.97.1 --bun-version 1.3.14 --pnpm-version 11.17.0 --claude-version 2.1.220 --codex-version 0.145.0 --playwright-version 1.62.0 --playwright-mcp-version 0.0.78 --tag maudebox
 ```
 
 ## Run
@@ -382,7 +382,7 @@ For each mount spec that uses mode `overlay` (for example `~/.gradle:~/.gradle:o
 | upper    | per-worktree+per-target Docker volume (`maudebox-overlay-…-<target-hash>`) | rw   |
 | workdir  | sibling subdir in the same volume                       | rw   |
 
-Effect: tools inside the container see the host files as a read-only starting point, but their writes land in a worktree-scoped volume. Concurrent containers for different worktrees do not collide, and the host source is not mutated. You can declare more than one and each gets its own per-worktree volume. Without an `overlay` mount, maudebox does not request `SYS_ADMIN` or disable the AppArmor profile.
+Effect: tools inside the container see the host files as a read-only starting point, but their writes land in a worktree-scoped volume. Concurrent containers for different worktrees do not collide, and the host source is not mutated. You can declare more than one and each gets its own per-worktree volume. Without an `overlay` mount, maudebox does not request `SYS_ADMIN` or disable the AppArmor profile. Every container still receives the much narrower `PERFMON` capability so the bundled `perf` can use `perf_event_open(2)`.
 
 `maudebox list` aggregates by project and shows an `OVERLAYS` count. It surfaces a project that is currently running, has an overlay volume on disk, or was created by `maudebox new` (a persisted manifest). `maudebox rm <id-or-name-or-path>` removes every project-scoped volume, drops the per-instance state dir, and — if the state dir holds a manifest left by `maudebox new` — also tears down the jj workspace / git worktree. A path handed to `maudebox <path>` directly has no manifest, so `rm` leaves the worktree alone and only cleans up what maudebox itself created.
 
