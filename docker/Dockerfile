@@ -53,6 +53,17 @@ ENV COLORTERM=truecolor
 # warning; the symlink itself is created in the Claude Code install step.
 ENV PATH=/root/.local/bin:$PATH
 
+# …which also means the updater-owned launcher shadows the pinned binary. The
+# native installer stamps `installMethod=native` +
+# `autoUpdatesProtectedForNative=true` into ~/.claude/state.json, and that pair
+# makes Claude Code ignore `autoUpdates: false` — only DISABLE_AUTOUPDATER /
+# DISABLE_UPDATES in the environment actually stop it. Left on, a background
+# update stages a ~290 MB binary into the ephemeral container layer and
+# re-points ~/.local/bin/claude at it, un-pinning $CLAUDE_VERSION and breaking
+# the command outright if the staged file is incomplete. Same intent as the
+# `check_for_update_on_startup = false` the wrapper writes for Codex.
+ENV DISABLE_AUTOUPDATER=1
+
 # Claude Code refuses --dangerously-skip-permissions when running as root
 # unless IS_SANDBOX=1 signals the environment is already sandboxed. The
 # container *is* the sandbox here (see the "Container runs as root" notes),

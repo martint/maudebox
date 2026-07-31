@@ -43,7 +43,7 @@ As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`,
 ## Prerequisites
 
 - Docker (tested with OrbStack on macOS; should work with Docker Desktop and native Linux Docker too).
-- A Rust toolchain (stable, 1.75+) to build the wrapper. `cargo` and `rustc` only.
+- A Rust toolchain (stable, 1.85+) to build the wrapper. `cargo` and `rustc` only.
 - A host directory where maudebox can create `~/.m2/repository` if it does not already exist.
 - A host with Claude Code installed (optional — its global config under `~/.claude/` is bind-mounted into the container if present).
 
