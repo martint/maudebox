@@ -25,6 +25,10 @@
 #       The entrypoint loops over these and mounts each overlayfs. Without
 #       this env var, no overlay setup happens at all.
 #
+#   --device /dev/fuse            (opt-in via the wrapper's `--fuse`; the
+#                                  entrypoint only relaxes the node's mode so a
+#                                  dropped-privilege client can open it)
+#
 set -euo pipefail
 
 HOME_DIR="${HOME:-/root}"
@@ -85,6 +89,18 @@ fi
 # launch while still root: cheap and idempotent.
 if [ -d "$HOME_DIR/.ssh" ]; then
     chmod 700 "$HOME_DIR/.ssh"
+fi
+
+# ── FUSE device permissions ───────────────────────────────────────────────────
+# Present only when the wrapper was asked for FUSE (`--fuse` / `fuse = true`),
+# which passes `--device /dev/fuse`. Docker reproduces the host node's mode, and
+# hosts that restrict it to root:root 0660 would leave the dropped-privilege
+# user unable to open it — fusermount3 is setuid root, but the client process
+# opens /dev/fuse itself. Widen it here while still root; the device is
+# container-private, so this grants nothing beyond the capability already
+# granted by --fuse.
+if [ -c /dev/fuse ]; then
+    chmod 666 /dev/fuse 2>/dev/null || true
 fi
 
 # ── Codex standalone install (for the `codex remote-control` daemon) ─────────

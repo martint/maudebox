@@ -45,6 +45,7 @@ const EXAMPLES: &str = "Examples:
   maudebox rm feature-x                  # full teardown of an instance
   maudebox rm /path/to/myproject         # remove volumes + state for a path
   maudebox --mount ~/.aws:~/.aws:ro      # bind ~/.aws read-only into the container
+  maudebox --fuse . bash                 # allow FUSE mounts (sshfs, rclone, …) inside
   maudebox mount add ~/.gradle:~/.gradle:overlay # persist an overlay mount
   maudebox alias add cl 'claude --dangerously-skip-permissions --remote-control $MAUDEBOX_INSTANCE'
   maudebox config edit                   # open the user config in $EDITOR
@@ -100,6 +101,16 @@ struct Cli {
     /// `--network` flag overrides the config key entirely.
     #[arg(long, value_name = "NAME")]
     network: Vec<String>,
+
+    /// Allow FUSE filesystems (sshfs, rclone, gocryptfs, …) to be mounted
+    /// from inside the container. Exposes `/dev/fuse` and adds the same
+    /// `SYS_ADMIN` capability and AppArmor exemption an `overlay` mount
+    /// needs, so it is off by default. The image ships `fusermount3`; the
+    /// client itself is an in-container `sudo apt-get install …` away. Can
+    /// also be set for every launch with `fuse = true` in
+    /// $XDG_CONFIG_HOME/maudebox/config.toml.
+    #[arg(long)]
+    fuse: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -168,32 +179,25 @@ fn dispatch(cli: Cli) -> Result<i32> {
         mount,
         instance,
         network,
+        fuse,
         command,
     } = cli;
+    let launch = cmd::run::LaunchOptions {
+        image: tag,
+        memory_from,
+        extra_mounts: mount,
+        instance,
+        network,
+        fuse,
+    };
     match command {
-        None => default_run(
-            tag,
-            memory_from,
-            mount,
-            instance,
-            network,
-            ".".to_string(),
-            Vec::new(),
-        ),
+        None => default_run(launch, ".".to_string(), Vec::new()),
         Some(Command::Default(args)) => {
             let mut it = args.into_iter();
             let first = it.next().unwrap_or_else(|| ".".to_string());
             let inner: Vec<String> = it.collect();
             let project_dir = resolve::resolve_project(&first)?;
-            default_run(
-                tag,
-                memory_from,
-                mount,
-                instance,
-                network,
-                project_dir,
-                inner,
-            )
+            default_run(launch, project_dir, inner)
         }
         Some(Command::List) => cmd::list::run(),
         Some(Command::Rm { target }) => cmd::rm::run(&target),
@@ -201,26 +205,23 @@ fn dispatch(cli: Cli) -> Result<i32> {
         Some(Command::Mount(args)) => cmd::mount::run(args.action),
         Some(Command::Alias(args)) => cmd::alias::run(args.action),
         Some(Command::Config(args)) => cmd::config::run(args.action),
-        Some(Command::New(args)) => cmd::new::run(args, tag, mount, instance, network),
+        Some(Command::New(args)) => cmd::new::run(args, launch),
     }
 }
 
 fn default_run(
-    image: String,
-    memory_from: Option<String>,
-    extra_mounts: Vec<String>,
-    instance: Option<String>,
-    network: Vec<String>,
+    launch: cmd::run::LaunchOptions,
     project_dir: String,
     command: Vec<String>,
 ) -> Result<i32> {
     cmd::run::run(cmd::run::RunOptions {
-        image,
-        memory_from: memory_from.unwrap_or_default(),
-        extra_mounts,
-        instance: instance.unwrap_or_default(),
+        image: launch.image,
+        memory_from: launch.memory_from.unwrap_or_default(),
+        extra_mounts: launch.extra_mounts,
+        instance: launch.instance.unwrap_or_default(),
         ephemeral_name: String::new(),
-        network,
+        network: launch.network,
+        fuse: launch.fuse,
         project_dir,
         command,
     })

@@ -165,6 +165,27 @@ pub fn read_network() -> Result<Vec<String>> {
     })
 }
 
+/// Read the optional `fuse` key — whether every launch should be able to mount
+/// FUSE filesystems (sshfs, rclone, gocryptfs, …) from inside the container.
+/// Enabling it exposes `/dev/fuse` and adds `SYS_ADMIN` plus an AppArmor
+/// exemption, the same privileges an `overlay` mount already requires, so it is
+/// off unless asked for. The CLI's `--fuse` turns it on for a single launch.
+pub fn read_fuse() -> Result<bool> {
+    let path = config_path()?;
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e).context(format!("reading {}", path.display())),
+    };
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    match v.get("fuse") {
+        Some(toml::Value::Boolean(b)) => Ok(*b),
+        Some(_) => bail!("`fuse` must be a boolean"),
+        None => Ok(false),
+    }
+}
+
 fn string_array(arr: &[toml::Value], key: &str) -> Result<Vec<String>> {
     arr.iter()
         .enumerate()

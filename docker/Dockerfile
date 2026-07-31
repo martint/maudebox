@@ -92,6 +92,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
+        fuse3 \
         gh \
         git \
         jq \
@@ -121,6 +122,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # The Linux entrypoint drops capabilities with the host UID, so profiling beyond
 # the host's perf_event_paranoid level still needs `sudo perf …`.
 RUN ln -sf "$(ls -d /usr/lib/linux-tools/*/perf | head -1)" /usr/local/bin/perf
+
+# fuse3 supplies the setuid `fusermount3` helper every libfuse client (sshfs,
+# rclone, gocryptfs, …) shells out to; the client itself is left to
+# `sudo apt-get install …` inside the container. Mounting still needs the
+# wrapper's `--fuse` (which exposes /dev/fuse and adds SYS_ADMIN) — without it
+# fusermount3 gets EPERM from mount(2). `user_allow_other` lets a FUSE mount
+# made by the dropped-privilege user carry `allow_other`, so root (and thus
+# `sudo`) can see through it; the package ships the option commented out.
+RUN sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf \
+ && grep -q '^user_allow_other' /etc/fuse.conf || echo user_allow_other >> /etc/fuse.conf
 
 # On Linux the entrypoint drops to a "host" user at HOST_UID before exec'ing
 # the user command, so privileged work (apt-get, mounts, etc.) needs sudo.

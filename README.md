@@ -14,6 +14,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 - GitHub CLI (`gh`)
 - `ripgrep`, `jq`, `vim`, `less`, `sudo`, OpenSSH client (`ssh`, `ssh-keygen`, `scp`)
 - `perf` (Linux profiler) — the container receives only the narrow `CAP_PERFMON` profiling capability; userspace profiling works as the regular user, while profiling beyond the host's `perf_event_paranoid` policy needs `sudo perf …`
+- `fusermount3` (from `fuse3`) — the mount helper every FUSE client needs; mounting requires launching with `--fuse` (see [FUSE filesystems](#fuse-filesystems)), and the client itself (`sshfs`, `rclone`, `gocryptfs`, …) is a `sudo apt-get install …` away inside the container
 
 Builds natively on amd64 and arm64.
 
@@ -140,7 +141,7 @@ Two equivalent ways:
 
 In both cases the spec syntax is `HOST:CONTAINER[:ro|rw|overlay]`. A leading `~` on the host side expands to `$HOME` (your host home); on the container side it expands to `/root` (the container's home, fixed by the entrypoint). Mode defaults to `rw`. CLI mounts are forwarded to the inner instance when used with `maudebox new`.
 
-Configuration is type-checked when it is read. Keys such as `mounts`, `project-roots`, and `default-command` must be arrays of strings; `network` must be a string or an array of strings; alias values must be strings. Invalid values stop the launch with the key and array index instead of being silently ignored.
+Configuration is type-checked when it is read. Keys such as `mounts`, `project-roots`, and `default-command` must be arrays of strings; `network` must be a string or an array of strings; `fuse` must be a boolean; alias values must be strings. Invalid values stop the launch with the key and array index instead of being silently ignored.
 
 **Overlay mode** layers a per-worktree writable Docker volume over the read-only host source, giving each worktree isolated writes while sharing the host content as warm starting state — handy for caches such as `~/.cargo`, `~/.gradle`, and `~/.npm`. Maven no longer needs an overlay: its split repository is built in. An existing `~/.m2:~/.m2:overlay` configuration conflicts with the built-in mounts and must be removed.
 
@@ -239,6 +240,31 @@ network = ["app_default", "db_default"]  # several
 ```
 
 Any `--network` flag overrides the config key entirely (the two don't merge). The named networks must already exist — bring the relevant compose projects up first.
+
+### FUSE filesystems
+
+Mounting a FUSE filesystem from inside the container — `sshfs` onto a remote box, `rclone mount` for cloud storage, `gocryptfs` for an encrypted tree — is off by default and enabled per launch with `--fuse`:
+
+```sh
+maudebox --fuse . bash
+```
+
+or for every launch, via the user config:
+
+```toml
+fuse = true
+```
+
+The flag exposes the host's `/dev/fuse` to the container and adds the `SYS_ADMIN` capability plus `--security-opt apparmor=unconfined` — the same privileges an `overlay` mount already requires, and the reason this isn't on by default. The kernel needs them for the `mount(2)` call itself: `fusermount3` is setuid root, but a setuid binary only gains a capability that's in the container's bounding set, and Docker's default seccomp and AppArmor profiles both block mounting without it.
+
+The image ships `fuse3` (the `fusermount3` helper and `user_allow_other` in `/etc/fuse.conf`) but no clients, so install the one you need inside the container:
+
+```sh
+sudo apt-get update && sudo apt-get install -y sshfs
+mkdir -p ~/remote && sshfs user@host:/srv ~/remote
+```
+
+Two caveats: the mount lives and dies with the container (it's inside the container's mount namespace, invisible to the host), and `--fuse` fails at `docker run` time if the host itself has no `/dev/fuse` — load the host's `fuse` module first.
 
 ### Managed MCP servers
 
@@ -382,7 +408,7 @@ For each mount spec that uses mode `overlay` (for example `~/.gradle:~/.gradle:o
 | upper    | per-worktree+per-target Docker volume (`maudebox-overlay-…-<target-hash>`) | rw   |
 | workdir  | sibling subdir in the same volume                       | rw   |
 
-Effect: tools inside the container see the host files as a read-only starting point, but their writes land in a worktree-scoped volume. Concurrent containers for different worktrees do not collide, and the host source is not mutated. You can declare more than one and each gets its own per-worktree volume. Without an `overlay` mount, maudebox does not request `SYS_ADMIN` or disable the AppArmor profile. Every container still receives the much narrower `PERFMON` capability so the bundled `perf` can use `perf_event_open(2)`.
+Effect: tools inside the container see the host files as a read-only starting point, but their writes land in a worktree-scoped volume. Concurrent containers for different worktrees do not collide, and the host source is not mutated. You can declare more than one and each gets its own per-worktree volume. Without an `overlay` mount (or `--fuse`, which needs the same privileges for its own `mount(2)` call), maudebox does not request `SYS_ADMIN` or disable the AppArmor profile. Every container still receives the much narrower `PERFMON` capability so the bundled `perf` can use `perf_event_open(2)`.
 
 `maudebox list` aggregates by project and shows an `OVERLAYS` count. It surfaces a project that is currently running, has an overlay volume on disk, or was created by `maudebox new` (a persisted manifest). `maudebox rm <id-or-name-or-path>` removes every project-scoped volume, drops the per-instance state dir, and — if the state dir holds a manifest left by `maudebox new` — also tears down the jj workspace / git worktree. A path handed to `maudebox <path>` directly has no manifest, so `rm` leaves the worktree alone and only cleans up what maudebox itself created.
 

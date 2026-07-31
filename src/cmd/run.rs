@@ -1,5 +1,5 @@
 use crate::config::{
-    read_aliases, read_default_command, read_mcp_servers, read_mounts, read_network,
+    read_aliases, read_default_command, read_fuse, read_mcp_servers, read_mounts, read_network,
 };
 use crate::docker;
 use crate::mount::{build_mount_plan, parse_mount_spec, Mode, MountPlan};
@@ -9,6 +9,18 @@ use crate::volume::{compute_codex_daemon_volume, compute_overlay_volume, compute
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::PathBuf;
+
+/// The top-level CLI flags that apply to any launch, whether it goes straight
+/// to a container (`maudebox <path>`) or through `maudebox new`. Grouped so the
+/// entry points take one parameter instead of a growing positional list.
+pub struct LaunchOptions {
+    pub image: String,
+    pub memory_from: Option<String>,
+    pub extra_mounts: Vec<String>,
+    pub instance: Option<String>,
+    pub network: Vec<String>,
+    pub fuse: bool,
+}
 
 pub struct RunOptions {
     pub image: String,
@@ -23,6 +35,9 @@ pub struct RunOptions {
     /// each). Empty = fall back to the config-file `network` key, else
     /// Docker's default bridge. See `--network` on the CLI.
     pub network: Vec<String>,
+    /// Expose `/dev/fuse` and request the privileges FUSE mounts need. False =
+    /// fall back to the config-file `fuse` key. See `--fuse` on the CLI.
+    pub fuse: bool,
     pub project_dir: String,
     pub command: Vec<String>,
 }
@@ -321,6 +336,14 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         }
     }
 
+    // ── FUSE ───────────────────────────────────────────────────────────────
+    // Opt-in, because mounting a FUSE filesystem needs /dev/fuse plus the same
+    // broad privileges an overlay mount does: the setuid fusermount3 helper
+    // only regains CAP_SYS_ADMIN if it's in the container's bounding set, and
+    // Docker's default seccomp/AppArmor profiles block mount(2) without it. The
+    // CLI flag enables it for one launch; the config key for every launch.
+    let fuse = opts.fuse || read_fuse()?;
+
     // ── status preamble ────────────────────────────────────────────────────
     println!("Image    : {}", opts.image);
     println!("Worktree : {}", project_dir.display());
@@ -336,6 +359,9 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         "Maven    : {} -> /root/.m2/repository/remote-cache (shared rw)",
         host_maven_repository.display()
     );
+    if fuse {
+        println!("FUSE     : /dev/fuse exposed (SYS_ADMIN, apparmor unconfined)");
+    }
 
     // ── network ────────────────────────────────────────────────────────────
     // Join one or more user-defined Docker networks (e.g. a compose project's
@@ -387,7 +413,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         "-e".into(),
         format!("MAUDEBOX_INSTANCE={instance_name}"),
     ];
-    args.extend(runtime_privilege_args(!overlays.is_empty()));
+    args.extend(runtime_privilege_args(!overlays.is_empty(), fuse));
     args.extend(network_args);
     args.extend(user_env);
     args.extend(term_env);
@@ -416,7 +442,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     docker::run_inherit(&args)
 }
 
-fn runtime_privilege_args(has_overlays: bool) -> Vec<String> {
+fn runtime_privilege_args(has_overlays: bool, fuse: bool) -> Vec<String> {
     // Docker's default capability set excludes CAP_PERFMON, and its
     // capability-aware seccomp profile consequently blocks perf_event_open(2).
     // Add the narrow profiling capability on every launch: after the Linux UID
@@ -424,7 +450,16 @@ fn runtime_privilege_args(has_overlays: bool) -> Vec<String> {
     // host's perf_event_paranoid permits it, while `sudo perf` regains
     // CAP_PERFMON from the container's bounding set for broader profiling.
     let mut args = vec!["--cap-add".into(), "PERFMON".into()];
-    if has_overlays {
+    // FUSE clients open /dev/fuse themselves, so the device node has to be in
+    // the container regardless of who performs the mount.
+    if fuse {
+        args.extend(["--device".into(), "/dev/fuse".into()]);
+    }
+    // Both overlayfs and FUSE end in a mount(2) call from inside the container,
+    // which needs CAP_SYS_ADMIN in the bounding set (Docker's seccomp profile
+    // only admits mount for capable containers) and an AppArmor profile that
+    // doesn't deny mounts outright. Emit the pair once when either asked.
+    if has_overlays || fuse {
         args.extend([
             "--cap-add".into(),
             "SYS_ADMIN".into(),
@@ -786,10 +821,10 @@ mod tests {
 
     #[test]
     fn perfmon_is_always_added_but_overlay_privileges_are_conditional() {
-        let ordinary = runtime_privilege_args(false);
+        let ordinary = runtime_privilege_args(false, false);
         assert_eq!(ordinary, ["--cap-add", "PERFMON"]);
 
-        let overlay = runtime_privilege_args(true);
+        let overlay = runtime_privilege_args(true, false);
         assert_eq!(
             overlay,
             [
@@ -801,6 +836,34 @@ mod tests {
                 "apparmor=unconfined",
             ]
         );
+    }
+
+    #[test]
+    fn fuse_adds_the_device_and_the_mount_privileges() {
+        assert_eq!(
+            runtime_privilege_args(false, true),
+            [
+                "--cap-add",
+                "PERFMON",
+                "--device",
+                "/dev/fuse",
+                "--cap-add",
+                "SYS_ADMIN",
+                "--security-opt",
+                "apparmor=unconfined",
+            ]
+        );
+    }
+
+    #[test]
+    fn fuse_and_overlays_together_request_each_privilege_once() {
+        let both = runtime_privilege_args(true, true);
+        assert_eq!(both.iter().filter(|a| *a == "SYS_ADMIN").count(), 1);
+        assert_eq!(
+            both.iter().filter(|a| *a == "apparmor=unconfined").count(),
+            1
+        );
+        assert_eq!(both.iter().filter(|a| *a == "/dev/fuse").count(), 1);
     }
 
     #[test]

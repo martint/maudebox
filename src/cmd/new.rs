@@ -1,5 +1,5 @@
 use crate::cmd::rm;
-use crate::cmd::run::{run as run_cmd, RunOptions};
+use crate::cmd::run::{run as run_cmd, LaunchOptions, RunOptions};
 use crate::manifest::{self, Manifest, WorkspaceKind};
 use crate::resolve::resolve_project;
 use crate::vcs;
@@ -53,13 +53,10 @@ pub struct NewArgs {
 // exits, like `maudebox <path>` does. With --ephemeral, the workspace and
 // its project volumes are torn down on exit. jj is preferred when both .jj
 // and .git are present (colocated repos).
-pub fn run(
-    args: NewArgs,
-    image: String,
-    extra_mounts: Vec<String>,
-    instance: Option<String>,
-    network: Vec<String>,
-) -> Result<i32> {
+// `launch.memory_from` is deliberately unused: an ephemeral workspace points
+// Claude's auto-memory at the *source* project below, so memories accrue
+// against the long-lived repo rather than the short-lived workspace.
+pub fn run(args: NewArgs, launch: LaunchOptions) -> Result<i32> {
     let NewArgs {
         name,
         source: source_opt,
@@ -174,7 +171,7 @@ pub fn run(
     // distinguish a maudebox-created worktree from a user-handed path; the
     // recorded `target` is what lets `maudebox <name>` reattach without the
     // user typing the worktree path back.
-    let discriminator = instance.unwrap_or_default();
+    let discriminator = launch.instance.unwrap_or_default();
     let state_dir = compute_state_dir(&target)?;
     manifest::write(
         &state_dir,
@@ -190,16 +187,17 @@ pub fn run(
     // Recursive launch — call run_cmd directly rather than spawning another
     // wrapper process. Same effect, fewer hops.
     let rc = run_cmd(RunOptions {
-        image,
+        image: launch.image,
         memory_from: source.display().to_string(),
-        extra_mounts,
+        extra_mounts: launch.extra_mounts,
         instance: discriminator,
         ephemeral_name: if ephemeral {
             name.clone()
         } else {
             String::new()
         },
-        network,
+        network: launch.network,
+        fuse: launch.fuse,
         project_dir: target.display().to_string(),
         command: inner_cmd,
     });
