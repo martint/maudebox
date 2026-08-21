@@ -81,6 +81,33 @@ if [ -d "$CLAUDE_DIR" ]; then
     fi
 fi
 
+# ── opencode permission posture ───────────────────────────────────────────────
+# The container already *is* the sandbox, so opencode shouldn't layer approval
+# prompts on top — the same reasoning as IS_SANDBOX=1 for Claude and
+# sandbox_mode=danger-full-access for Codex. Most of opencode's permissions
+# already default to "allow"; `external_directory` doesn't, and it would prompt
+# constantly here, since a jj workspace's base repo legitimately sits outside
+# the project directory.
+#
+# Seed this into the container's *global* config rather than the managed layer
+# maudebox generates: managed config outranks project config, so a per-project
+# opencode.json could never tighten it back up. Written once, only when absent,
+# and the file lives in the persistent config volume — edit it freely.
+OPENCODE_CONFIG_FILE="$HOME_DIR/.config/opencode/opencode.json"
+if [ -d "$(dirname "$OPENCODE_CONFIG_FILE")" ] && [ ! -e "$OPENCODE_CONFIG_FILE" ]; then
+    cat > "$OPENCODE_CONFIG_FILE" <<'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": "allow"
+}
+EOF
+    # Created here as root. The chown sweep below skips a tree whose root is
+    # already host-owned, so hand this file over now rather than relying on it.
+    if [ -n "${HOST_UID:-}" ] && [ "${HOST_UID:-0}" != "0" ]; then
+        chown "${HOST_UID}:${HOST_GID:-$HOST_UID}" "$OPENCODE_CONFIG_FILE" 2>/dev/null || true
+    fi
+fi
+
 # ── SSH dir permissions ───────────────────────────────────────────────────────
 # ~/.ssh is a maudebox-state subpath shared across all containers (keys
 # generated or added inside one container are reused by the next). Docker
@@ -212,7 +239,9 @@ if [ -n "${HOST_UID:-}" ] && [ -n "${HOST_GID:-}" ] && [ "$HOST_UID" != "0" ]; t
             -exec chown -h "${HOST_UID}:${HOST_GID}" {} + 2>/dev/null || true
     fi
 
-    for d in /maudebox/overlay-*/upper /root/.claude /root/.codex /root/.codex/app-server-control /root/.config/gh /root/.ssh /root; do
+    for d in /maudebox/overlay-*/upper /root/.claude /root/.codex /root/.codex/app-server-control \
+             /root/.config/gh /root/.config/opencode /root/.local/share/opencode \
+             /root/.local/state/opencode /root/.cache/opencode /root/.ssh /root; do
         [ -e "$d" ] || continue
         [ "$(stat -c %u "$d" 2>/dev/null)" = "$HOST_UID" ] && continue
         find "$d" -xdev \! -uid "$HOST_UID" \

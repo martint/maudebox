@@ -62,7 +62,20 @@ pub fn run(opts: RunOptions) -> Result<i32> {
 
     // ── persistent state (maudebox-state volume + read-only host overlays) ──
     docker::ensure_volume(STATE_VOLUME, &[])?;
-    docker::ensure_subpaths(&opts.image, STATE_VOLUME, &["claude", "codex", "gh", "ssh"])?;
+    docker::ensure_subpaths(
+        &opts.image,
+        STATE_VOLUME,
+        &[
+            "claude",
+            "codex",
+            "gh",
+            "ssh",
+            "opencode/config",
+            "opencode/data",
+            "opencode/state",
+            "opencode/cache",
+        ],
+    )?;
 
     let mut claude_mounts: Vec<String> = vec![
         "--mount".into(),
@@ -147,6 +160,64 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         ));
     }
 
+    // ── opencode state (maudebox-state subpaths) + read-only host config ───
+    // Unlike Claude and Codex, opencode spreads its state over four XDG
+    // directories rather than one home under $HOME: config, data (auth.json,
+    // the SQLite DB, logs, per-repo state), state (the locks that serialize
+    // access to that DB, keyed to the data dir — so they belong with it) and
+    // cache (LSP servers it downloads on demand). All four are subpaths of the
+    // shared state volume, so they persist across containers and worktrees.
+    //
+    // Nothing under data/ is bound from the host, deliberately: opencode's
+    // credentials inside the container stay separate from any the host user
+    // holds, which is what lets a container run with different or more limited
+    // ones. The cost is one `opencode auth login` after the state volume is
+    // dropped. The SQLite DB opens WAL with a 5s busy_timeout, so it carries the
+    // same constraint as Codex's — it is safe to share across concurrent
+    // containers only because a named volume is VM-local, never virtiofs.
+    let mut opencode_mounts: Vec<String> = Vec::new();
+    for (subpath, dst) in [
+        ("config", "/root/.config/opencode"),
+        ("data", "/root/.local/share/opencode"),
+        ("state", "/root/.local/state/opencode"),
+        ("cache", "/root/.cache/opencode"),
+    ] {
+        opencode_mounts.push("--mount".into());
+        opencode_mounts.push(format!(
+            "type=volume,src={STATE_VOLUME},dst={dst},volume-subpath=opencode/{subpath}"
+        ));
+    }
+    // Hand-authored config from the host, bound read-only over the config
+    // subpath — the same arrangement as Claude's ~/.claude entries above, and
+    // for the same reason: agents, commands and skills are expensive to
+    // reconstruct, so they must outlive the state volume.
+    //
+    // `opencode.json` is deliberately absent from this list. It is where
+    // `provider.<id>.options.apiKey` lives, so binding it would pull host
+    // credentials into the container and undo the separation above; add a
+    // `mounts` entry for it if you want the host's model settings anyway.
+    // Global instructions and skills need nothing here: opencode falls back to
+    // ~/.claude/CLAUDE.md and auto-loads ~/.claude/skills and ~/.agents/skills,
+    // all of which are already bound for Claude and Codex.
+    let host_opencode_dir = h.join(".config").join("opencode");
+    for p in [
+        "AGENTS.md",
+        "tui.json",
+        "agent",
+        "command",
+        "skill",
+        "plugin",
+    ] {
+        let host_path = host_opencode_dir.join(p);
+        if host_path.exists() {
+            opencode_mounts.push("-v".into());
+            opencode_mounts.push(format!(
+                "{}:/root/.config/opencode/{p}:ro",
+                host_path.display()
+            ));
+        }
+    }
+
     // ── host VCS config (read-only) ────────────────────────────────────────
     let mut vcs_config_mounts: Vec<String> = Vec::new();
     let gitconfig = h.join(".gitconfig");
@@ -184,6 +255,16 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         managed_mcp_mount.push("-v".into());
         managed_mcp_mount.push(format!(
             "{}:/etc/claude-code/managed-mcp.json:ro",
+            host_path.display()
+        ));
+        // opencode's managed layer is JSON at /etc/opencode/opencode.json and,
+        // like Claude's, outranks every user-writable layer — so it carries
+        // nothing but the servers. Written only when servers exist, which keeps
+        // the highest-precedence file absent rather than empty.
+        let host_path = write_opencode_config_json(servers)?;
+        opencode_mounts.push("-v".into());
+        opencode_mounts.push(format!(
+            "{}:/etc/opencode/opencode.json:ro",
             host_path.display()
         ));
     }
@@ -426,6 +507,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     args.extend(claude_mounts);
     args.extend(codex_mounts);
     args.extend(codex_daemon_mount);
+    args.extend(opencode_mounts);
     args.extend(maven_mounts);
     args.extend(managed_mcp_mount);
     args.extend(vcs_config_mounts);
@@ -594,9 +676,10 @@ fn write_managed_mcp_json(
     let mut root = serde_json::Map::new();
     let mut inner = serde_json::Map::new();
     for (name, val) in servers {
-        // Drop the reserved `codex` sub-table (Codex-only overrides) so it
-        // doesn't leak into Claude's mcpServers entry as an unknown field.
+        // Drop the reserved per-agent override sub-tables so they don't leak
+        // into Claude's mcpServers entry as unknown fields.
         let val = strip_reserved_key(val, "codex");
+        let val = strip_reserved_key(&val, "opencode");
         let json_val: serde_json::Value =
             serde_json::to_value(&val).with_context(|| format!("converting mcp.{name} to JSON"))?;
         inner.insert(name.clone(), json_val);
@@ -700,6 +783,8 @@ fn translate_mcp_for_codex(name: &str, val: &toml::Value) -> toml::Value {
             "type" => {}
             // Handled below as overrides.
             "codex" => {}
+            // Another agent's override sub-table, not this one's business.
+            "opencode" => {}
             other => {
                 eprintln!(
                     "maudebox: mcp.{name}: dropping field '{other}' for Codex \
@@ -709,6 +794,110 @@ fn translate_mcp_for_codex(name: &str, val: &toml::Value) -> toml::Value {
         }
     }
     if let Some(overrides) = table.get("codex").and_then(|v| v.as_table()) {
+        for (key, v) in overrides {
+            out.insert(key.clone(), v.clone());
+        }
+    }
+    toml::Value::Table(out)
+}
+
+// Serialize `[mcp.NAME]` tables into opencode's managed config
+// (`/etc/opencode/opencode.json`) and write it atomically to a stable host
+// path, with the same inode discipline as write_managed_mcp_json.
+//
+// opencode's managed layer outranks every other config source, so — unlike
+// Codex's system layer, which is the lowest — this file holds only the servers.
+// Anything a user might want to vary per project (the permission posture, say)
+// belongs in the container's global config instead, which the entrypoint seeds.
+fn write_opencode_config_json(
+    servers: &std::collections::BTreeMap<String, toml::Value>,
+) -> Result<PathBuf> {
+    let dir = xdg_state_home()?.join("maudebox");
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join("opencode-config.json");
+
+    let mut root = serde_json::Map::new();
+    root.insert(
+        "$schema".to_string(),
+        serde_json::Value::String("https://opencode.ai/config.json".into()),
+    );
+    let mut inner = serde_json::Map::new();
+    for (name, val) in servers {
+        let translated = translate_mcp_for_opencode(name, val);
+        let json_val: serde_json::Value = serde_json::to_value(&translated)
+            .with_context(|| format!("converting mcp.{name} to JSON"))?;
+        inner.insert(name.clone(), json_val);
+    }
+    root.insert("mcp".to_string(), serde_json::Value::Object(inner));
+    let content = serde_json::to_string_pretty(&serde_json::Value::Object(root))?;
+
+    let tmp = dir.join(format!("opencode-config.json.tmp.{}", std::process::id()));
+    fs::write(&tmp, content).with_context(|| format!("writing {}", tmp.display()))?;
+    fs::rename(&tmp, &path)
+        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+    Ok(path)
+}
+
+// Translate one `[mcp.NAME]` table into opencode's `mcp.NAME` object. opencode
+// splits servers by transport into `local` (a spawned process) and `remote` (a
+// URL) and accepts a different field per transport, so the mapping is decided
+// by whether `url` is present — the same inference Codex makes — rather than by
+// Claude's `type` hint, which is dropped. Beyond that: program and arguments
+// become one `command` array, `env` becomes `environment`, and a
+// `[mcp.NAME.opencode]` sub-table is merged last as verbatim overrides (that is
+// where opencode-only keys such as `enabled`, `timeout` or `oauth` go). Fields
+// that don't apply to the chosen transport are dropped with a warning.
+fn translate_mcp_for_opencode(name: &str, val: &toml::Value) -> toml::Value {
+    let mut out = toml::map::Map::new();
+    let Some(table) = val.as_table() else {
+        return toml::Value::Table(out);
+    };
+
+    let remote = table.contains_key("url");
+    out.insert(
+        "type".into(),
+        toml::Value::String(if remote { "remote" } else { "local" }.into()),
+    );
+
+    for (key, v) in table {
+        match (key.as_str(), remote) {
+            ("url", true) | ("headers", true) => {
+                out.insert(key.clone(), v.clone());
+            }
+            // opencode takes the program and its arguments as a single array.
+            ("command", false) => {
+                let mut command = vec![v.clone()];
+                if let Some(args) = table.get("args").and_then(toml::Value::as_array) {
+                    command.extend(args.iter().cloned());
+                }
+                out.insert("command".into(), toml::Value::Array(command));
+            }
+            // Folded into `command` above.
+            ("args", false) => {}
+            ("env", false) => {
+                out.insert("environment".into(), v.clone());
+            }
+            ("cwd", false) => {
+                out.insert(key.clone(), v.clone());
+            }
+            // Transport hint for Claude; opencode gets an explicit `type` above.
+            ("type", _) => {}
+            // Handled below as overrides.
+            ("opencode", _) => {}
+            // Another agent's override sub-table, not this one's business.
+            ("codex", _) => {}
+            (other, _) => {
+                let transport = if remote { "remote" } else { "local" };
+                eprintln!(
+                    "maudebox: mcp.{name}: dropping field '{other}' for opencode \
+                     (not valid on a {transport} server; put opencode-only keys \
+                     under [mcp.{name}.opencode])"
+                );
+            }
+        }
+    }
+
+    if let Some(overrides) = table.get("opencode").and_then(|v| v.as_table()) {
         for (key, v) in overrides {
             out.insert(key.clone(), v.clone());
         }
@@ -797,6 +986,72 @@ mod tests {
         assert_eq!(t["url"].as_str(), Some("https://override"));
         // The reserved sub-table is not itself emitted as a field.
         assert!(!t.contains_key("codex"));
+    }
+
+    #[test]
+    fn opencode_local_server_folds_args_into_command() {
+        let v = server("command = \"playwright-mcp\"\nargs = [\"--headless\"]\n[env]\nK = \"V\"\n");
+        let out = translate_mcp_for_opencode("pw", &v);
+        let t = out.as_table().unwrap();
+        assert_eq!(t["type"].as_str(), Some("local"));
+        // Program and arguments become one array; `env` is `environment`.
+        let command = t["command"].as_array().unwrap();
+        assert_eq!(command[0].as_str(), Some("playwright-mcp"));
+        assert_eq!(command[1].as_str(), Some("--headless"));
+        assert!(!t.contains_key("args"));
+        assert_eq!(
+            t["environment"].as_table().unwrap()["K"].as_str(),
+            Some("V")
+        );
+    }
+
+    #[test]
+    fn opencode_url_selects_the_remote_transport() {
+        let v = server("type = \"http\"\nurl = \"https://x\"\n[headers]\nX = \"y\"\n");
+        let out = translate_mcp_for_opencode("gh", &v);
+        let t = out.as_table().unwrap();
+        // Claude's transport hint is replaced by opencode's own local/remote split.
+        assert_eq!(t["type"].as_str(), Some("remote"));
+        assert_eq!(t["url"].as_str(), Some("https://x"));
+        assert_eq!(t["headers"].as_table().unwrap()["X"].as_str(), Some("y"));
+    }
+
+    #[test]
+    fn opencode_drops_fields_the_transport_rejects() {
+        // `env` is meaningful only for a spawned process; opencode rejects
+        // unknown fields, so it must not ride along on a remote server.
+        let v = server("url = \"https://x\"\n[env]\nK = \"V\"\n");
+        let out = translate_mcp_for_opencode("gh", &v);
+        let t = out.as_table().unwrap();
+        assert!(!t.contains_key("environment"));
+        assert!(!t.contains_key("env"));
+    }
+
+    #[test]
+    fn opencode_subtable_overrides_and_adds() {
+        let v =
+            server("command = \"x\"\n[opencode]\ntimeout = 30000\ncommand = [\"y\", \"--flag\"]\n");
+        let out = translate_mcp_for_opencode("pw", &v);
+        let t = out.as_table().unwrap();
+        // opencode-only key passes through; the sub-table wins on conflicts.
+        assert_eq!(t["timeout"].as_integer(), Some(30000));
+        assert_eq!(t["command"].as_array().unwrap()[0].as_str(), Some("y"));
+        // The reserved sub-table is not itself emitted as a field.
+        assert!(!t.contains_key("opencode"));
+    }
+
+    #[test]
+    fn agent_subtables_stay_out_of_each_others_config() {
+        let v =
+            server("command = \"x\"\n[codex]\nstartup_timeout_sec = 5\n[opencode]\ntimeout = 5\n");
+        assert!(!translate_mcp_for_codex("x", &v)
+            .as_table()
+            .unwrap()
+            .contains_key("timeout"));
+        assert!(!translate_mcp_for_opencode("x", &v)
+            .as_table()
+            .unwrap()
+            .contains_key("startup_timeout_sec"));
     }
 
     #[test]

@@ -8,6 +8,7 @@ ARG BUN_VERSION=1.3.14
 ARG PNPM_VERSION=11.17.0
 ARG CLAUDE_VERSION=2.1.220
 ARG CODEX_VERSION=0.145.0
+ARG OPENCODE_VERSION=1.18.21
 ARG PLAYWRIGHT_VERSION=1.62.0
 ARG PLAYWRIGHT_MCP_VERSION=0.0.78
 
@@ -76,6 +77,14 @@ ENV IS_SANDBOX=1
 # Codex hard-errors if CODEX_HOME is set to a path that doesn't exist, so the
 # dir is created at build time too (covers a bare `docker run` with no volume).
 ENV CODEX_HOME=/root/.codex
+
+# opencode downloads and swaps in a new build on startup unless told not to.
+# Same failure mode as Claude Code's updater: it would un-pin $OPENCODE_VERSION,
+# and since the binary lives in root-owned /usr/local/bin while the session runs
+# as the host UID after the Linux privilege drop, the replacement fails partway
+# instead of cleanly. The config-file equivalent (`autoupdate: false`) is only
+# honored at the global config path, so use the environment variable.
+ENV OPENCODE_DISABLE_AUTOUPDATE=true
 
 # Host gitconfig is bind-mounted read-only by the maudebox wrapper, so the user's identity
 # and aliases work inside the container. But the host's commit.gpgsign=true
@@ -166,6 +175,14 @@ RUN mkdir -p /etc/claude-code
 # and /root/.codex so $CODEX_HOME resolves even without the state-volume mount.
 RUN mkdir -p /etc/codex /root/.codex
 
+# opencode reads /etc/opencode/opencode.json as its "managed" config layer. The
+# maudebox wrapper materializes it from the user's config.toml [mcp.NAME] tables
+# (translated to opencode's own MCP dialect) and bind-mounts it there. Unlike
+# Codex's system layer this is the *highest*-precedence layer, matching how
+# Claude Code treats /etc/claude-code/managed-mcp.json — so it carries MCP
+# servers only, and nothing a user would reasonably want to override per project.
+RUN mkdir -p /etc/opencode
+
 # ── mvnd ──────────────────────────────────────────────────────────────────────
 # Detect host arch so the image builds on both amd64 and arm64
 RUN set -eux; \
@@ -237,6 +254,35 @@ RUN set -eux; \
     && ln -sf "releases/${CODEX_VERSION}-${CODEX_TARGET}" /opt/codex/packages/standalone/current \
     && chmod -R a+rX /opt/codex \
     && ln -sf /opt/codex/packages/standalone/current/codex /usr/local/bin/codex
+
+# ── opencode ─────────────────────────────────────────────────────────────────
+# A single ~180 MB bun-compiled binary in a per-arch tarball, so it drops
+# straight into /usr/local/bin — no installer-managed layout to reproduce (see
+# the Codex step above for the contrast). Verified against the release asset's
+# recorded digest, same as jj and pnpm.
+#
+# Two variants exist per Linux arch beyond the musl/glibc split: the x64
+# "baseline" build targets CPUs without AVX2. We take the non-baseline build
+# deliberately — it is faster and every machine this image is built for has
+# AVX2. A pre-Haswell host would need `-baseline` here instead (the symptom is
+# SIGILL on the first `opencode` invocation, not a graceful error).
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+        x86_64)  OC_ARCH="x64"   ;; \
+        aarch64) OC_ARCH="arm64" ;; \
+        *)       echo "Unsupported arch: $ARCH" && exit 1 ;; \
+    esac; \
+    curl -fsSL \
+        "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-${OC_ARCH}.tar.gz" \
+        -o /tmp/opencode.tar.gz \
+    && EXPECTED="$(curl -fsSL "https://api.github.com/repos/anomalyco/opencode/releases/tags/v${OPENCODE_VERSION}" \
+        | jq -r --arg name "opencode-linux-${OC_ARCH}.tar.gz" '.assets[] | select(.name == $name) | .digest | sub("^sha256:"; "")')" \
+    && test -n "$EXPECTED" && test "$EXPECTED" != null \
+    && echo "$EXPECTED  /tmp/opencode.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin opencode \
+    && chmod a+rx /usr/local/bin/opencode \
+    && rm /tmp/opencode.tar.gz
 
 # ── jujutsu ───────────────────────────────────────────────────────────────────
 # Use musl binaries: statically linked, no libc version dependency
