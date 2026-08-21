@@ -351,7 +351,7 @@ Edits to the user config only take effect for **new** containers; an already-run
 
 For a second terminal on the same machine, `docker exec -it <instance> opencode` is usually simpler than a server: the container is named after `$MAUDEBOX_INSTANCE`.
 
-**Window titles.** Under tmux the window name belongs to `maudebox`, not to the agent: the wrapper runs `tmux rename-window "$MAUDEBOX_INSTANCE"` host-side, which also turns `automatic-rename` off for that window, so nothing inside the container can change it — that's what keeps a tab tracking its worktree for the container's lifetime. opencode's own title updates land on the *pane* title instead (`#{pane_title}`), which you can surface with tmux's `pane-border-status`. Outside tmux, opencode sets the terminal title while a session runs and the shell prompt re-asserts the instance name afterwards, exactly as Claude Code behaves. `OPENCODE_DISABLE_TERMINAL_TITLE=1` turns opencode's title updates off entirely.
+**Window titles.** The terminal is named after the instance: the entrypoint emits it, `prompt.sh` re-asserts it at every prompt, and under tmux the wrapper renames the window host-side with `tmux rename-window "$MAUDEBOX_INSTANCE"` (which also turns `automatic-rename` off, so nothing in the container can change it). Claude Code and Codex emit no title escape, so the instance name simply stands. opencode is the exception — it sets `OSC 0` to the constant `OpenCode`, and under iTerm2's tmux control mode (`tmux -CC`) the emulator parses the pane stream directly, so that would replace your instance name on the tab. The image therefore sets `OPENCODE_DISABLE_TERMINAL_TITLE=1`; unset it for a launch if you want opencode's titles back.
 
 ### Spawning a new workspace or worktree
 

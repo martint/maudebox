@@ -86,6 +86,15 @@ ENV CODEX_HOME=/root/.codex
 # honored at the global config path, so use the environment variable.
 ENV OPENCODE_DISABLE_AUTOUPDATE=true
 
+# maudebox names the terminal after the instance: the entrypoint emits OSC 2
+# with $MAUDEBOX_INSTANCE, prompt.sh re-asserts it at every prompt, and the
+# wrapper renames the tmux window host-side. opencode is the only bundled agent
+# that fights this — it emits OSC 0 with the constant "OpenCode" (Claude Code
+# and Codex emit no title escape at all), and under iTerm2's tmux control mode
+# the emulator parses the pane stream directly, so that constant becomes the tab
+# name. It identifies neither the project nor the session, so it is pure loss.
+ENV OPENCODE_DISABLE_TERMINAL_TITLE=1
+
 # Host gitconfig is bind-mounted read-only by the maudebox wrapper, so the user's identity
 # and aliases work inside the container. But the host's commit.gpgsign=true
 # (with 1Password's macOS-only ssh-sign program) would auto-fail every commit.
