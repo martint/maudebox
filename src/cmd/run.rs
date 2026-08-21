@@ -311,7 +311,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let instance_name = instance_handle(&basename, &opts.instance);
-    let mut label_strs: Vec<String> = vec![
+    let mut container_labels: Vec<String> = vec![
         format!("maudebox.instance={instance_name}"),
         format!("maudebox.project={}", project_dir.display()),
     ];
@@ -319,17 +319,17 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     if !opts.ephemeral_name.is_empty() {
         let state_dir = compute_state_dir(&project_dir)?;
         fs::create_dir_all(&state_dir)?;
-        label_strs.push("maudebox.ephemeral=true".into());
-        label_strs.push(format!("maudebox.ephemeral-name={}", opts.ephemeral_name));
-        label_strs.push(format!("maudebox.state-dir={}", state_dir.display()));
+        container_labels.push("maudebox.ephemeral=true".into());
+        container_labels.push(format!("maudebox.ephemeral-name={}", opts.ephemeral_name));
+        container_labels.push(format!("maudebox.state-dir={}", state_dir.display()));
         ephemeral_mount.push("-v".into());
         ephemeral_mount.push(format!("{}:/run/maudebox", state_dir.display()));
     } else {
-        label_strs.push("maudebox.ephemeral=false".into());
+        container_labels.push("maudebox.ephemeral=false".into());
     }
 
-    // The `--label` flags for `docker run` are interleaved label_strs.
-    let label_args: Vec<String> = label_strs
+    // The `--label` flags for `docker run` are interleaved container_labels.
+    let label_args: Vec<String> = container_labels
         .iter()
         .flat_map(|l| ["--label".to_string(), l.clone()])
         .collect();
@@ -377,8 +377,14 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         for (i, o) in overlays.iter().enumerate() {
             let n = i + 1;
             let vol = compute_overlay_volume(&project_dir, &o.container_dst);
-            let mut volume_labels: Vec<String> = label_strs.clone();
-            volume_labels.push(format!("maudebox.overlay-target={}", o.container_dst));
+            // Project state, so the labels describe the project and what the
+            // volume backs — never the launch that happened to create it. The
+            // container's own labels (instance, ephemeral, …) belong on the
+            // container, which is the thing they have the lifetime of.
+            let volume_labels = vec![
+                format!("maudebox.project={}", project_dir.display()),
+                format!("maudebox.overlay-target={}", o.container_dst),
+            ];
             docker::ensure_volume(&vol, &volume_labels)?;
             overlay_args.push("-v".into());
             overlay_args.push(format!("{}:/maudebox/overlay-{n}/lower:ro", o.host_src));
