@@ -5,7 +5,7 @@ use crate::docker;
 use crate::mount::{build_mount_plan, parse_mount_spec, Mode, MountPlan};
 use crate::paths::{canonicalize, expand_container_tilde, home, xdg_state_home, STATE_VOLUME};
 use crate::vcs::detect_vcs_base;
-use crate::volume::{compute_codex_daemon_volume, compute_overlay_volume, compute_state_dir};
+use crate::volume::{compute_overlay_volume, compute_state_dir};
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::PathBuf;
@@ -334,11 +334,17 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         .flat_map(|l| ["--label".to_string(), l.clone()])
         .collect();
 
-    let codex_daemon_volume = compute_codex_daemon_volume(&project_dir, &instance_name);
-    docker::ensure_volume(&codex_daemon_volume, &label_strs)?;
+    // Codex's app-server keeps a startup lock and a Unix socket in a fixed
+    // directory under $CODEX_HOME. That path is inside the state-volume subtree
+    // every container shares, so without isolation a second container's daemon
+    // would see the first's lock and socket — and a socket on a shared volume is
+    // connectable across containers, so a remote-control frontend could attach
+    // to another worktree's session. tmpfs gives each container its own, and it
+    // is gone when the container is: nothing there outlives the process that
+    // wrote it. The entrypoint hands the mount to the host UID on Linux.
     let codex_daemon_mount = vec![
-        "-v".to_string(),
-        format!("{codex_daemon_volume}:/root/.codex/app-server-control"),
+        "--tmpfs".to_string(),
+        "/root/.codex/app-server-control".to_string(),
     ];
 
     // ── Maven split local repository ───────────────────────────────────────
