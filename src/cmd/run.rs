@@ -407,8 +407,37 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         user_env.push("-e".into());
         user_env.push(format!("HOST_GID={}", get_gid()));
     }
-    let mut term_env: Vec<String> = vec!["-e".into(), "TERM_PROGRAM=tmux".into()];
-    for v in ["COLORTERM", "LC_TERMINAL", "LC_TERMINAL_VERSION"] {
+    // Terminal identity. A TUI in the container talks to whatever terminal is
+    // on the other end of the tty, so it needs to be told which one that is.
+    //
+    // TERM_PROGRAM is what decides an escape *dialect*: opencode, for one,
+    // wraps clipboard writes in tmux's DCS passthrough when it sees `tmux`,
+    // which only something that unwraps DCS will ever act on. tmux 3.2+ exports
+    // the value itself, so forwarding the host's is usually enough; force it
+    // when `$TMUX` says we're inside an older tmux that doesn't.
+    let mut term_env: Vec<String> = Vec::new();
+    let term_program = if std::env::var_os("TMUX").is_some() {
+        Some("tmux".to_string())
+    } else {
+        std::env::var("TERM_PROGRAM").ok().filter(|v| !v.is_empty())
+    };
+    if let Some(value) = term_program {
+        term_env.push("-e".into());
+        term_env.push(format!("TERM_PROGRAM={value}"));
+    }
+    // TERM decides *capabilities*. `docker run -it` defaults it to a bare
+    // `xterm` when unset, which understates every modern terminal — enhanced
+    // key reporting (kitty keyboard / CSI-u) is the one that bites, since
+    // without it a TUI sees ctrl-chords as raw control bytes rather than named
+    // keys. The entrypoint falls back if the container's terminfo database
+    // doesn't know the forwarded value.
+    for v in [
+        "TERM",
+        "TERM_PROGRAM_VERSION",
+        "COLORTERM",
+        "LC_TERMINAL",
+        "LC_TERMINAL_VERSION",
+    ] {
         if let Ok(val) = std::env::var(v) {
             if !val.is_empty() {
                 term_env.push("-e".into());

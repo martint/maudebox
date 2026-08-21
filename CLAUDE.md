@@ -112,6 +112,18 @@ Edge cases: a regular `git` checkout (`.git` is a directory) or a non-VCS dir is
 
 For VCS info: it tries jj first (`jj workspace root` → if inside, look up change ID and closest bookmark), and falls back to git's symbolic-ref/short-hash. The `closest_bookmark(to) = heads(::to & bookmarks())` revset alias is passed inline via `jj log --config=...` so we don't need to mount the user's jj config. The whole thing is a stripped-down bash port of the host's powerlevel10k `prompt_my_jj` segment — same data, no zsh/p10k/Nerd Font dependency.
 
+### Terminal identity forwarding
+
+A TUI inside the container drives whatever terminal sits on the other end of the tty, so the wrapper forwards the host's `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM` and `LC_TERMINAL*`.
+
+`TERM_PROGRAM` selects an escape *dialect*. opencode wraps clipboard writes in tmux's DCS passthrough (`\ePtmux;…`) when it sees `tmux`, and only something that unwraps DCS will act on that — so claiming tmux off-tmux silently breaks the clipboard, and not claiming it inside tmux breaks it the other way. tmux 3.2+ exports the value itself; the wrapper forces it when `$TMUX` is set so older tmux is covered too.
+
+`TERM` selects *capabilities*. `docker run -it` defaults it to a bare `xterm` when the flag is absent, which advertises a terminal from 1984 — everything that consults terminfo (ncurses programs, `less`, editors, anything asking whether the terminal does 256 colors) then reasons from that instead of from the real one. Forwarding the host's value is the fix; the image installs `ncurses-term` for the extended terminfo database, and the entrypoint checks the forwarded value with `infocmp`, falling back to `xterm-256color` with a notice — ncurses programs abort on an unknown `TERM` rather than degrading, so an unrecognized forward would be worse than no forward at all.
+
+Note what this does *not* buy: enhanced key reporting is negotiated at runtime, not derived from `TERM`. opencode, measured under a pty, sends the same probes (`CSI ? u` for kitty support, `CSI > 4 ; 1 m` for modifyOtherKeys) under `xterm`, `xterm-256color`, `screen-256color` and `tmux-256color` alike, and honors legacy control bytes regardless of the outcome. Don't reach for `TERM` when diagnosing a key that doesn't register.
+
+Two terminal capabilities remain out of reach from inside a container regardless: naming the tmux window (done host-side, see the prompt/tmux notes) and writing the system clipboard, which has no route out except OSC 52 and therefore depends on tmux's `set-clipboard`/`allow-passthrough` and the terminal's own permission setting.
+
 ### Host git/jj config sharing
 
 `maudebox` bind-mounts the host's git and jj config files read-only so the user's identity, aliases, ignore rules, and revset aliases (e.g. `closest_bookmark`) are available inside the container:

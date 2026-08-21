@@ -81,6 +81,19 @@ if [ -d "$CLAUDE_DIR" ]; then
     fi
 fi
 
+# ── terminal type ─────────────────────────────────────────────────────────────
+# The wrapper forwards the host's $TERM so capability negotiation matches the
+# terminal actually on the other end of the tty (left alone, `docker run -it`
+# defaults it to a bare `xterm`). The image carries ncurses-term, but it can't
+# know every terminfo entry that exists, and an unrecognized $TERM makes ncurses
+# programs fail outright rather than degrade — so fall back when the database
+# has no match.
+if [ -n "${TERM:-}" ] && command -v infocmp >/dev/null 2>&1 \
+   && ! infocmp "$TERM" >/dev/null 2>&1; then
+    echo "[entrypoint] no terminfo entry for TERM=$TERM; falling back to xterm-256color"
+    export TERM=xterm-256color
+fi
+
 # ── opencode permission posture ───────────────────────────────────────────────
 # The container already *is* the sandbox, so opencode shouldn't layer approval
 # prompts on top — the same reasoning as IS_SANDBOX=1 for Claude and

@@ -118,6 +118,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         jq \
         less \
         linux-tools-generic \
+        ncurses-term \
         openssh-client \
         python-is-python3 \
         python3 \
