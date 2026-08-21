@@ -40,9 +40,9 @@ const EXAMPLES: &str = "Examples:
   maudebox new feature-x --from main     # start from a specific revision
   maudebox new feature-x --ephemeral     # tear down workspace/volumes on exit
   maudebox new feature-x mvnd verify     # spawn workspace, run a build in it
-  maudebox list                          # list registered maudebox instances
+  maudebox list                          # list maudebox projects
   maudebox keep feature-x                # don't tear down on exit
-  maudebox rm feature-x                  # full teardown of an instance
+  maudebox rm feature-x                  # full teardown of a project
   maudebox rm /path/to/myproject         # remove volumes + state for a path
   maudebox --mount ~/.aws:~/.aws:ro      # bind ~/.aws read-only into the container
   maudebox --fuse . bash                 # allow FUSE mounts (sshfs, rclone, …) inside
@@ -121,17 +121,20 @@ enum Command {
     /// Create a jj workspace or git worktree and launch maudebox on it.
     New(cmd::new::NewArgs),
 
-    /// List every registered maudebox instance.
+    /// List every maudebox project, and the instances running against each.
     List,
 
-    /// Remove a maudebox-managed instance (workspace, project volumes, state dir).
+    /// Remove a maudebox project (its volumes, state dir, and workspace).
     ///
-    /// For projects created by `maudebox new`, this also tears down the
-    /// jj workspace / git worktree. For paths handed to `maudebox <path>`
+    /// Everything removed is project-scoped, so this affects every instance
+    /// of that project; it is refused while any of them is running. For
+    /// projects created by `maudebox new`, this also tears down the jj
+    /// workspace / git worktree. For paths handed to `maudebox <path>`
     /// directly, only volumes and state dir are removed — the worktree is
     /// left alone since maudebox didn't create it.
     Rm {
-        /// Container ID, instance basename, `new`'s `<name>`, or a project path.
+        /// Project path or basename, `new`'s `<name>`, or a running
+        /// container's ID or instance handle.
         target: String,
     },
 
