@@ -1,47 +1,39 @@
-use crate::cmd::run::instance_handle;
 use crate::docker;
 use crate::manifest;
-use crate::volume::compute_state_dir;
+use crate::volume::{compute_state_dir, OVERLAY_PREFIX};
 use anyhow::Result;
 use std::path::PathBuf;
 
 #[derive(Debug, Default)]
 struct VolumeRow {
+    name: String,
     project: String,
-    instance: String,
-    ephemeral: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct ContainerRow {
     project: String,
-    id: String,
     instance: String,
     ephemeral: String,
 }
 
-#[derive(Debug, Default)]
-struct ManifestRow {
-    project: String,
-    instance: String,
-}
-
-// An instance is a `(project, instance-handle)` pair: anything currently
-// running, with at least one project volume on disk, OR created by `maudebox
-// new` (a persisted manifest) shows up. Keying on the pair rather than the
-// project alone keeps `--instance` variants — several containers against one
-// project, distinguished only by their `maudebox.instance` label — as separate
-// rows instead of collapsing them. The three sources are independent: a
-// Older `new`-created workspaces may have no volume, and once their container
-// exits `docker ps` shows nothing, so their manifest is the only record left.
-// The instance handle comes straight from each source's label (the
-// manifest reconstructs it from the target basename and recorded discriminator).
+// A row is a *project*: the worktree path plus whatever maudebox keeps for it
+// on disk. Instances are not rows — an instance is a running container, and it
+// stops existing when that container exits, so the INSTANCES column reports the
+// ones running right now and nothing more.
 //
-// An ephemeral instance whose keep flag is set is shown as non-ephemeral,
-// since at that point the workspace will outlive the container.
+// A project shows up if it is running, still owns a volume, or was created by
+// `maudebox new` (a persisted manifest). The three sources are independent: a
+// `new`-created workspace may have no volume at all, and once its container
+// exits `docker ps` shows nothing, so the manifest is the only record left.
+//
+// Volumes are project state and carry no instance of their own. Reading one out
+// of a volume label used to produce a row claiming that a single, arbitrary
+// instance — whichever launch created the volume first, since `docker volume
+// create` never relabels — owned the project.
 pub fn run() -> Result<i32> {
-    let vol_fmt = "{{.Label \"maudebox.project\"}}\t{{.Label \"maudebox.instance\"}}\t{{.Label \"maudebox.ephemeral\"}}";
-    let ps_fmt = "{{.Label \"maudebox.project\"}}\t{{.ID}}\t{{.Label \"maudebox.instance\"}}\t{{.Label \"maudebox.ephemeral\"}}";
+    let vol_fmt = "{{.Name}}\t{{.Label \"maudebox.project\"}}";
+    let ps_fmt = "{{.Label \"maudebox.project\"}}\t{{.Label \"maudebox.instance\"}}\t{{.Label \"maudebox.ephemeral\"}}";
 
     let ps_out = docker::capture(&[
         "ps",
@@ -54,144 +46,90 @@ pub fn run() -> Result<i32> {
         "volume",
         "ls",
         "--filter",
-        "name=maudebox-overlay-",
+        "label=maudebox.project",
         "--format",
         vol_fmt,
     ])?;
-    let volumes: Vec<VolumeRow> = vol_out
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            let mut it = line.split('\t');
-            VolumeRow {
-                project: it.next().unwrap_or("").to_string(),
-                instance: it.next().unwrap_or("").to_string(),
-                ephemeral: it.next().unwrap_or("").to_string(),
-            }
-        })
-        .collect();
-    let running: Vec<ContainerRow> = ps_out
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| {
-            let mut it = l.split('\t');
-            ContainerRow {
-                project: it.next().unwrap_or("").to_string(),
-                id: it.next().unwrap_or("").to_string(),
-                instance: it.next().unwrap_or("").to_string(),
-                ephemeral: it.next().unwrap_or("").to_string(),
-            }
-        })
-        .collect();
 
-    // `maudebox new` instances: the manifest's `target` is the worktree (and
-    // thus the project) path. Skip legacy manifests with no target and any
-    // whose workspace has since been removed out-of-band. The full instance
-    // handle is reconstructed from the target basename and the recorded
-    // `--instance` discriminator, exactly as `run` builds the label;
-    // volume/container labels still override it in the merge below.
-    let manifests: Vec<ManifestRow> = manifest::all()?
+    let volumes = parse_volume_rows(&vol_out);
+    let running = parse_container_rows(&ps_out);
+
+    // `maudebox new` projects: the manifest's `target` is the worktree path.
+    // Skip legacy manifests with no target and any whose workspace has since
+    // been removed out-of-band.
+    let manifest_projects: Vec<String> = manifest::all()?
         .into_iter()
         .filter_map(|(_state_dir, m)| {
-            if m.target.is_empty() {
+            if m.target.is_empty() || !PathBuf::from(&m.target).is_dir() {
                 return None;
             }
-            let target = PathBuf::from(&m.target);
-            if !target.is_dir() {
-                return None;
-            }
-            let basename = target
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            Some(ManifestRow {
-                instance: instance_handle(&basename, &m.instance),
-                project: m.target,
-            })
+            Some(m.target)
         })
         .collect();
 
-    // An instance is identified by its `(project, instance-handle)` pair, not the
-    // project path alone: `--instance` lets several containers run against one
-    // project, each with a distinct `maudebox.instance` label but the *same*
-    // `maudebox.project`. Keying on project alone collapses them into one row and
-    // hides every `--instance` variant behind the first. Overlay volumes and the
-    // state dir are per-project (shared across a project's instances), so the
-    // OVERLAYS count below is still counted by project.
-    let mut keys: Vec<(String, String)> = volumes
+    let mut projects: Vec<String> = volumes
         .iter()
-        .map(|v| (v.project.clone(), v.instance.clone()))
-        .chain(
-            running
-                .iter()
-                .map(|r| (r.project.clone(), r.instance.clone())),
-        )
-        .chain(
-            manifests
-                .iter()
-                .map(|m| (m.project.clone(), m.instance.clone())),
-        )
-        .filter(|(p, _)| !p.is_empty())
+        .map(|v| v.project.clone())
+        .chain(running.iter().map(|r| r.project.clone()))
+        .chain(manifest_projects)
+        .filter(|p| !p.is_empty())
         .collect();
-    keys.sort();
-    keys.dedup();
+    projects.sort();
+    projects.dedup();
 
-    if keys.is_empty() {
-        println!("No maudebox instances found.");
+    if projects.is_empty() {
+        println!("No maudebox projects found.");
         return Ok(0);
     }
 
     let mut rows: Vec<Vec<String>> = vec![vec![
-        "ID".into(),
         "STATUS".into(),
-        "INSTANCE".into(),
+        "INSTANCES".into(),
         "EPHEMERAL".into(),
         "OVERLAYS".into(),
         "PATH".into(),
     ]];
 
-    for (project, instance) in &keys {
-        let vol = volumes
+    for project in &projects {
+        let here: Vec<&ContainerRow> = running.iter().filter(|r| &r.project == project).collect();
+        let overlays = volumes
             .iter()
-            .find(|v| &v.project == project && &v.instance == instance);
-        let run = running
-            .iter()
-            .find(|r| &r.project == project && &r.instance == instance);
-        let instance = instance.clone();
-        let mut ephemeral = vol
-            .map(|v| v.ephemeral.clone())
-            .filter(|s| !s.is_empty())
-            .or_else(|| run.map(|r| r.ephemeral.clone()))
-            .unwrap_or_default();
-        let id = run.map(|r| r.id.clone()).unwrap_or_default();
-        let overlays = volumes.iter().filter(|v| &v.project == project).count();
+            .filter(|v| &v.project == project && v.name.starts_with(OVERLAY_PREFIX))
+            .count();
 
-        if ephemeral == "true" {
+        // Ephemeral is a property of a launch, not of the project, so it is
+        // only meaningful while a container is up. A keep flag means the
+        // workspace will outlive the container, so report it as non-ephemeral.
+        let ephemeral = if here.is_empty() {
+            "-".to_string()
+        } else if here.iter().any(|r| r.ephemeral == "true") {
             let state_dir = compute_state_dir(&PathBuf::from(project))?;
             if state_dir.join("keep").exists() {
-                ephemeral = "false".into();
+                "false".into()
+            } else {
+                "true".into()
             }
-        }
+        } else {
+            "false".into()
+        };
 
-        let id_disp = if id.is_empty() {
+        let instances = if here.is_empty() {
             "-".to_string()
         } else {
-            id.clone()
+            let mut names: Vec<&str> = here.iter().map(|r| r.instance.as_str()).collect();
+            names.sort_unstable();
+            names.join(", ")
         };
-        let status = if id.is_empty() { "stopped" } else { "running" };
+
         rows.push(vec![
-            id_disp,
-            status.into(),
-            if instance.is_empty() {
-                "?".into()
+            if here.is_empty() {
+                "stopped"
             } else {
-                instance
-            },
-            if ephemeral.is_empty() {
-                "-".into()
-            } else {
-                ephemeral
-            },
+                "running"
+            }
+            .into(),
+            instances,
+            ephemeral,
             overlays.to_string(),
             project.clone(),
         ]);
@@ -199,6 +137,33 @@ pub fn run() -> Result<i32> {
 
     print_table(&rows);
     Ok(0)
+}
+
+fn parse_volume_rows(out: &str) -> Vec<VolumeRow> {
+    out.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut it = line.split('\t');
+            VolumeRow {
+                name: it.next().unwrap_or("").to_string(),
+                project: it.next().unwrap_or("").to_string(),
+            }
+        })
+        .collect()
+}
+
+fn parse_container_rows(out: &str) -> Vec<ContainerRow> {
+    out.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut it = line.split('\t');
+            ContainerRow {
+                project: it.next().unwrap_or("").to_string(),
+                instance: it.next().unwrap_or("").to_string(),
+                ephemeral: it.next().unwrap_or("").to_string(),
+            }
+        })
+        .collect()
 }
 
 fn print_table(rows: &[Vec<String>]) {
@@ -222,5 +187,41 @@ fn print_table(rows: &[Vec<String>]) {
             }
         }
         println!("{line}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Two containers against one project is exactly what `--instance` exists
+    // for, and both belong on that project's single row.
+    #[test]
+    fn concurrent_instances_share_one_project_row() {
+        let rows = parse_container_rows(
+            "/src/trino\ttrino\tfalse\n/src/trino\ttrino-review\tfalse\n/src/other\tother\tfalse\n",
+        );
+        let here: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.project == "/src/trino")
+            .map(|r| r.instance.as_str())
+            .collect();
+        assert_eq!(here, ["trino", "trino-review"]);
+    }
+
+    // Only overlay volumes feed the OVERLAYS count; any other project-labelled
+    // volume (a leftover from an older maudebox, say) must not inflate it.
+    #[test]
+    fn overlays_are_counted_by_name_not_by_project_label_alone() {
+        let rows = parse_volume_rows(
+            "maudebox-overlay-proj-6b166a34-fee00b7a\t/src/proj\n\
+             maudebox-codex-proj-proj-review-6b166a34\t/src/proj\n",
+        );
+        let overlays = rows
+            .iter()
+            .filter(|v| v.project == "/src/proj" && v.name.starts_with(OVERLAY_PREFIX))
+            .count();
+        assert_eq!(overlays, 1);
+        assert_eq!(rows.len(), 2);
     }
 }

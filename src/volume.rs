@@ -14,6 +14,12 @@ pub fn sha256_prefix(input: &str) -> String {
     hex::encode(&digest[..4])
 }
 
+// Name prefix shared by every overlay volume. Volumes are enumerated by their
+// `maudebox.project` label, so this is only used to tell overlays apart from
+// anything else that carries that label — a volume left by an older maudebox,
+// for instance — when counting the OVERLAYS column.
+pub const OVERLAY_PREFIX: &str = "maudebox-overlay-";
+
 // Project key: human-readable basename + 8-char hash of the full path. Used
 // as the prefix for every overlay volume on a given project and as the
 // state-dir name.
@@ -23,7 +29,7 @@ pub fn compute_volume_name(project_dir: &Path) -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let s = project_dir.to_string_lossy();
-    format!("maudebox-overlay-{basename}-{}", sha256_prefix(&s))
+    format!("{OVERLAY_PREFIX}{basename}-{}", sha256_prefix(&s))
 }
 
 // Per-overlay volume name: project key + 8-char hash of the container target.
