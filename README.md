@@ -13,7 +13,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 - [Codex CLI](https://github.com/openai/codex) — OpenAI's coding agent, native binary
 - [opencode](https://opencode.ai) — open-source coding agent, native binary
 - GitHub CLI (`gh`)
-- `ripgrep`, `jq`, `vim`, `less`, `sudo`, OpenSSH client (`ssh`, `ssh-keygen`, `scp`)
+- `ripgrep`, `jq`, `vim`, `less`, `sudo`, `rsync`, OpenSSH client (`ssh`, `ssh-keygen`, `scp`)
 - `perf` (Linux profiler) — the container receives only the narrow `CAP_PERFMON` profiling capability; userspace profiling works as the regular user, while profiling beyond the host's `perf_event_paranoid` policy needs `sudo perf …`
 - `fusermount3` (from `fuse3`) — the mount helper every FUSE client needs; mounting requires launching with `--fuse` (see [FUSE filesystems](#fuse-filesystems)), and the client itself (`sshfs`, `rclone`, `gocryptfs`, …) is a `sudo apt-get install …` away inside the container
 
