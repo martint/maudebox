@@ -80,6 +80,36 @@ pub fn read_mcp_servers() -> Result<Option<std::collections::BTreeMap<String, to
     Ok(Some(out))
 }
 
+// Codex settings that are not maudebox's business to model live in a `[codex]`
+// table and are passed through verbatim into the generated Codex system config
+// (`/etc/codex/config.toml`). That file is written on the host and bind-mounted,
+// so anything here survives the state volume being recreated — unlike the
+// container's own $CODEX_HOME/config.toml. Returns None when no `[codex]` table
+// is present.
+pub fn read_codex_config() -> Result<Option<toml::map::Map<String, toml::Value>>> {
+    let path = config_path()?;
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).context(format!("reading {}", path.display())),
+    };
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let table = match v.get("codex") {
+        Some(v) => v.as_table().context("`codex` must be a table")?,
+        None => return Ok(None),
+    };
+    if table.is_empty() {
+        return Ok(None);
+    }
+    // MCP servers have their own agent-independent spelling; routing them
+    // through here would bypass the translation and desync Claude/opencode.
+    if table.contains_key("mcp_servers") {
+        bail!("`codex.mcp_servers` is not supported: declare MCP servers as `[mcp.NAME]` tables so all three agents get them");
+    }
+    Ok(Some(table.clone()))
+}
+
 // Aliases preserve insertion order in the file. Use a Vec of (name, value)
 // rather than BTreeMap so listing order matches what the user wrote.
 pub fn read_aliases() -> Result<Vec<(String, String)>> {

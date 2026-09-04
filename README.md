@@ -200,7 +200,7 @@ An explicit command on the CLI always takes precedence, so `maudebox . bash` sti
 
 ### Editing the user config directly
 
-For anything the `mount` / `alias` subcommands don't cover (e.g. `[mcp.*]` tables), open the file in your editor:
+For anything the `mount` / `alias` subcommands don't cover (e.g. `[mcp.*]` or `[codex]` tables), open the file in your editor:
 
 ```sh
 maudebox config edit    # opens $VISUAL / $EDITOR (or vi) on the config file
@@ -332,6 +332,25 @@ Edits to the user config only take effect for **new** containers; an already-run
 ### Codex
 
 `codex` runs inside the same isolated container as `claude`. Because the container already *is* the sandbox (see *Sandboxed execution* above), `maudebox` writes `sandbox_mode = "danger-full-access"` and `approval_policy = "never"` into the low-precedence `/etc/codex/config.toml` so Codex doesn't layer its own Landlock sandbox and approval prompts on top — the same reasoning behind `IS_SANDBOX=1` for Claude. This is the lowest config layer, so your own `~/.codex/config.toml` (persisted in the state volume) can tighten it back up if you prefer. Log in once with `codex login` inside any container; the login persists across all of them. Global instructions go in `~/.codex/AGENTS.md` on the host (bind-mounted read-only); per-project instructions in an `AGENTS.md` at the project root.
+
+**Host-side Codex settings.** Anything else you want Codex to pick up in every container goes in a `[codex]` table in the user config:
+
+```toml
+[codex]
+model_provider = "litellm"
+model = "my-model"
+model_reasoning_effort = "high"
+
+[codex.model_providers.litellm]
+name = "LiteLLM"
+base_url = "http://host.docker.internal:4000/v1"   # see *Reaching host services*
+wire_api = "responses"                             # Codex 0.149+ rejects "chat"
+http_headers = { Authorization = "Bearer sk-..." }
+```
+
+The point is durability: the container's own `~/.codex/config.toml` lives in the `maudebox-state` volume, so settings put there are lost if the volume is recreated, and there is no route to seed it from the host. The `[codex]` table is written on the host and bind-mounted, so it survives any container or volume being dropped.
+
+It lands at `/etc/codex/managed_config.toml` rather than in the system config above, because Codex silently ignores `model_provider` and `model_providers` in the system layer (it ignores them in the project layer too, there with a warning). **That layer outranks both `~/.codex/config.toml` and `-c`**, so a key you put here is pinned — you can't switch it back for a single invocation, only by editing the table and relaunching. Keep settings you want to vary per session out of it; maudebox's own defaults deliberately stay in the overridable system config. MCP servers don't belong here either — declare those as `[mcp.NAME]` tables so all three agents get them; `codex.mcp_servers` is rejected.
 
 **Remote control.** Codex is installed as the official installer's "standalone" layout (not a bare binary) specifically so `codex remote-control start` works — that daemon requires the standalone install, and it's what lets the ChatGPT app (mobile, web, desktop) drive a session running in the container. It's an outbound websocket to OpenAI's cloud (authenticated by your `codex login`), so nothing needs publishing. Pair once with `codex remote-control pair`; the enrollment persists in the shared state volume, so afterwards `codex remote-control start` alone re-enrolls. The container hostname is set to `$MAUDEBOX_INSTANCE`, so a paired worktree shows up under its handle (e.g. `trino-review`) in your device list rather than a random container ID. To also attach a local terminal to the same session, run `codex --remote unix://` in another pane. (Unlike Claude's single `--remote-control` flag, Codex splits this into a daemon plus attached frontends.)
 
