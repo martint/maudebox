@@ -63,7 +63,7 @@ Downloaded mvnd, jj, rustup, bun, pnpm, and opencode artifacts are checked again
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.6 --jj-version 0.44.0 --rust-version 1.98.0 --bun-version 1.4.0 --pnpm-version 11.22.0 --claude-version 2.1.228 --codex-version 0.149.0 --opencode-version 1.18.21 --playwright-version 1.62.1 --playwright-mcp-version 0.0.79 --tag maudebox
+cargo xtask image --mvnd-version 1.0.6 --jj-version 0.44.0 --rust-version 1.98.0 --bun-version 1.4.0 --pnpm-version 11.22.0 --claude-version 2.1.228 --codex-version 0.153.4 --opencode-version 1.18.21 --playwright-version 1.62.1 --playwright-mcp-version 0.0.79 --tag maudebox
 ```
 
 ## Run
