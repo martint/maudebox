@@ -19,6 +19,10 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 
 Builds natively on amd64 and arm64.
 
+The product behavior and deliberate scope boundaries are specified in
+[`docs/SPEC.md`](docs/SPEC.md). Architectural decisions and their trade-offs
+are recorded in [`docs/decisions/`](docs/decisions/).
+
 ## What problems does this solve
 
 ### Sandboxed Claude Code execution

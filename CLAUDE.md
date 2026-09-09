@@ -240,6 +240,43 @@ Claude Code, Codex and opencode each needed the same eight decisions. When a fou
 
 ## Conventions for changes in this repo
 
+### Ideas are evaluated and filed before implementation
+
+An idea, complaint, or "we should also" request is not automatically an
+implementation order. Check it against `docs/SPEC.md`: it may already be
+specified, contradict a deliberate boundary, or expose a genuine gap. File new
+scope as an issue with the current behavior, proposed behavior, constraints,
+dependencies, and acceptance criteria. Implementation is a separate decision.
+
+This does not defer corrections to work already in progress, defects relative
+to the specification, or changes the user explicitly asked to implement.
+
+### Keep the product specification consistent
+
+`docs/SPEC.md` is the source of truth for shipped user-visible behavior and
+deliberate product limits. Read the relevant section before changing behavior.
+Update it in the same change whenever a feature is added, removed, or altered;
+the specification describes what ships in that change, not a future plan.
+
+Preserve existing section anchors where possible and add subsections instead of
+renumbering unrelated material. A future feature belongs in an issue until it
+is adopted. If mentioning proposed behavior is necessary to explain a current
+limit, label it clearly as unimplemented.
+
+### Record decisions of consequence
+
+`docs/decisions/` holds numbered decision records. Write one in the same change
+when an approach wins over a viable alternative, establishes a hard-to-change
+constraint, deliberately accepts a material cost, or deliberately declines a
+capability. Choices with an obvious default and no live alternative do not need
+one.
+
+Accepted records are immutable. A reversal or material correction creates a
+new record and marks the relationship at both ends and in the index. The
+`Alternatives considered` section is required: record what lost and why.
+
+### Technical conventions
+
 - Keep the image multi-arch — any new tool install should branch on `uname -m` the same way `mvnd` and `jj` do.
 - The container runs as **root** (no `USER` directive), with everything under `/root`. The entrypoint may drop privileges to the host UID at the end on Linux, but the privileged setup (overlay mount, `/etc/passwd` rewrite, chowns) still runs as root. Don't add a `USER` directive or replace the entrypoint's `setpriv` step with a docker-CLI `--user` flag — that would break the overlay mount, which needs real-root `CAP_SYS_ADMIN` in the user namespace.
 - Claude Code's installer drops a launcher symlink into `$HOME/.local/bin/claude` whose target lives in `$HOME/.local/share/claude/versions/<ver>`. The Dockerfile resolves the symlink (`readlink -f`) and moves the actual binary into `/usr/local/bin` so it lives outside any volume mount path. Don't replace this with a plain `mv` of the symlink. Keep the `~/.local/bin/claude → /usr/local/bin/claude` symlink — the native binary checks for it at startup and warns if it's missing.
@@ -247,4 +284,4 @@ Claude Code, Codex and opencode each needed the same eight decisions. When a fou
 - The jj release tarball stores members with a `./` prefix, so `tar -x … ./jj` is required (not `… jj`).
 - The overlayfs setup is the load-bearing trick when an `overlay` mount is requested. Don't replace it with a plain bind-mount or a `cp` of the source without understanding the isolation guarantees it provides.
 - **Overlay copy-up preserves lowerdir UIDs.** When the kernel copies a file from lowerdir to upperdir on first write, it preserves the lowerdir file's ownership. On macOS/OrbStack, virtiofs is root-squashed so everything in lowerdir appears as `uid=0` — which is why the container has to stay root there; dropping privileges would leave the upperdir unwritable. On Linux, lowerdir files are owned by the host user (no squash), so copy-up produces host-uid-owned upperdir files and the dropped-privilege process can write them.
-- **Keep `README.md` in sync with user-visible changes in the same commit.** Whenever a change adds, removes, or alters something the README documents — bundled tools or their versions, CLI subcommands/flags, the user-config schema (mounts, aliases), mount modes, overlay/state-volume behavior, the container user model, or the `cargo xtask` interface — update `README.md` in the *same* commit as the code change. The README is the user-facing contract; a feature change without a doc change leaves the contract stale. If a change is purely internal (refactor, rename of a private symbol, test-only) and nothing in the README references it, no update is needed. When in doubt, grep the README for the symbol/flag/section being touched.
+- **Keep `README.md` in sync with user-visible changes in the same commit.** Whenever a change adds, removes, or alters something the README documents — bundled tools or their versions, CLI subcommands/flags, the user-config schema (mounts, aliases), mount modes, overlay/state-volume behavior, the container user model, or the `cargo xtask` interface — update `README.md` in the *same* commit as the code change. `docs/SPEC.md` is the behavioral source of truth; the README is the public pitch and operating guide, and both must agree. If a change is purely internal (refactor, rename of a private symbol, test-only) and neither document references it, no update is needed. When in doubt, grep both documents for the symbol, flag, or section being touched.
