@@ -70,8 +70,8 @@ never deleted by `maudebox rm`.
 
 **Persistent state** is writable tool state kept outside a container's
 disposable layer. It includes agent logins and sessions, `gh` authentication,
-container-only SSH material, and opencode's XDG state. It is shared by all
-projects and instances through one Docker volume.
+container-only SSH material, and opencode's XDG state. A **state namespace** is
+one independent set of that state, shared by every launch that selects it.
 
 ### 2.5 Overlay mount
 
@@ -105,9 +105,11 @@ adds a discriminator so multiple containers can use one project concurrently:
 maudebox --instance review . claude
 ```
 
-Concurrent instances share project-scoped overlays and global persistent state.
-The discriminator separates running containers and their runtime-only sockets;
-it does not create a separate project or login environment.
+Concurrent instances share project-scoped overlays. They share persistent state
+when they select the same state namespace and remain independent when they
+select different namespaces. The instance discriminator separates running
+containers and their runtime-only sockets; it does not select a login
+environment.
 
 ### 3.2 Images and commands
 
@@ -214,29 +216,31 @@ Maven settings and credentials elsewhere under host `~/.m2` are not mounted.
 
 ## 7. Persistent identity and state
 
-One Docker volume named `maudebox-state` holds writable state shared across all
-projects and instances:
+Each state namespace is one Docker volume holding the following writable state:
 
 | State | Container location | Scope |
 |---|---|---|
-| Claude | `/root/.claude` | global |
-| Codex | `/root/.codex` | global |
-| `gh` | `/root/.config/gh` | global |
-| SSH | `/root/.ssh` | global, container-only |
-| opencode config | `/root/.config/opencode` | global |
-| opencode data | `/root/.local/share/opencode` | global |
-| opencode state | `/root/.local/state/opencode` | global |
-| opencode cache | `/root/.cache/opencode` | global |
+| Claude | `/root/.claude` | state namespace |
+| Codex | `/root/.codex` | state namespace |
+| `gh` | `/root/.config/gh` | state namespace |
+| SSH | `/root/.ssh` | state namespace, container-only |
+| opencode config | `/root/.config/opencode` | state namespace |
+| opencode data | `/root/.local/share/opencode` | state namespace |
+| opencode state | `/root/.local/state/opencode` | state namespace |
+| opencode cache | `/root/.cache/opencode` | state namespace |
 
-The state trees remain separate inside the volume. Dropping the volume forgets
-all of them together.
+The state trees remain separate inside a volume. Removing a namespace forgets
+all of them together. Project files, overlay volumes, Maven caches, host
+configuration mounts, and generated managed configuration are outside state
+namespaces.
 
 ### 7.1 Credentials
 
 Agent, `gh`, and SSH credentials created inside a container stay in the state
 volume. Maudebox does not import corresponding host credential stores. A login
-performed in one container is therefore available in future containers, while
-remaining independent of a login for the same tool on the host.
+performed in one container is therefore available in future containers using
+the same namespace, while remaining independent of the host and other
+namespaces.
 
 Credentials in the state volume are reconstructible state: removing the volume
 requires logging in again.
@@ -255,16 +259,40 @@ directory is isolated per container.
 ### 7.3 SSH
 
 `/root/.ssh` starts empty and is never a mount of host `~/.ssh`. Keys,
-`known_hosts`, and configuration created there are shared by all Maudebox
-containers. Its permissions are repaired at launch so OpenSSH accepts it.
+`known_hosts`, and configuration created there are shared by Maudebox containers
+using the same namespace. Its permissions are repaired at launch so OpenSSH
+accepts it.
 
 ### 7.4 State namespaces
 
-Maudebox currently has exactly one persistent state namespace. It cannot select
-independent sets of agent, `gh`, or opencode logins for different launches.
-`--instance` does not change this: instances share the state described above.
-An independent-namespace design is being evaluated in
-[issue #4](https://github.com/martint/maudebox/issues/4); it is not implemented.
+`--state NAME` selects an independent state namespace for a launch:
+
+```sh
+maudebox --state work .
+maudebox --state personal new feature-x
+```
+
+The `state` user-config key supplies the selection when the flag is absent. The
+flag takes precedence over configuration; without either, Maudebox uses the
+`default` namespace. `default` is reserved for the original `maudebox-state`
+volume, so existing installations retain their logins without migration.
+
+Other namespace names contain 1–32 lowercase ASCII letters, digits, or single
+hyphens and start and end with a letter or digit. A named namespace maps
+one-to-one to a labeled volume named `maudebox-state-<name>`. Invalid names fail
+before Docker is invoked. A launch creates its selected volume when needed.
+
+The namespace applies as a unit to every row in the state table above. It is
+available as `$MAUDEBOX_STATE` for diagnostics, but bundled tools do not inspect
+that variable. `maudebox list` reports the namespace beside every running
+instance. `--instance` remains an independent container handle and does not
+change state selection.
+
+`maudebox state list` lists discovered namespaces and their running instances.
+`maudebox state rm NAME` removes the namespace volume and reports that its
+credentials, sessions, and tool state will be forgotten. Removal is refused
+while any running or stopped container uses the volume. Project removal and
+ephemeral workspace cleanup never remove state namespaces.
 
 ## 8. Agent configuration
 
@@ -294,7 +322,7 @@ managed precedence. MCP servers are excluded from this table because §8.1 is
 their common source.
 
 Codex remote control uses outbound connectivity and the selected Codex login.
-Pairing persists in global Codex state. The instance handle becomes the
+Pairing persists in the selected state namespace. The instance handle becomes the
 container hostname and therefore the device name. Its control socket remains
 per-container so one instance cannot attach to another instance's local daemon.
 
@@ -330,6 +358,7 @@ The user configuration is TOML at
 - command aliases;
 - one or more Docker networks;
 - default FUSE access;
+- a default state namespace;
 - shared MCP servers and agent-specific MCP overrides;
 - managed Codex settings.
 
@@ -349,9 +378,8 @@ its overlay volumes and state directory. If Maudebox created the workspace, it
 also removes that workspace or worktree. A directly supplied project directory
 is left intact.
 
-Removal is refused while any instance of the project is running. Global
-`maudebox-state` is outside project cleanup and is removed only through Docker
-volume management.
+Removal is refused while any instance of the project is running. State
+namespaces are outside project cleanup and are managed with `maudebox state`.
 
 ## 12. Platform behavior
 

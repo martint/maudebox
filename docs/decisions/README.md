@@ -51,3 +51,4 @@ header rather than changing status.
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-record-decisions.md) | Record decisions in this repository | accepted |
+| [0002](0002-state-namespaces-use-separate-volumes.md) | State namespaces use separate volumes | accepted |

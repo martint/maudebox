@@ -216,6 +216,25 @@ pub fn read_fuse() -> Result<bool> {
     }
 }
 
+/// Read the optional persistent-state namespace used when a launch does not
+/// pass `--state`. Validation is shared with the CLI path and happens in the
+/// launcher before Docker is invoked.
+pub fn read_state() -> Result<Option<String>> {
+    let path = config_path()?;
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).context(format!("reading {}", path.display())),
+    };
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    match v.get("state") {
+        Some(toml::Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => bail!("`state` must be a string"),
+        None => Ok(None),
+    }
+}
+
 fn string_array(arr: &[toml::Value], key: &str) -> Result<Vec<String>> {
     arr.iter()
         .enumerate()

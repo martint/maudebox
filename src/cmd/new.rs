@@ -2,6 +2,7 @@ use crate::cmd::rm;
 use crate::cmd::run::{run as run_cmd, LaunchOptions, RunOptions};
 use crate::manifest::{self, Manifest, WorkspaceKind};
 use crate::resolve::resolve_project;
+use crate::state;
 use crate::vcs;
 use crate::volume::compute_state_dir;
 use anyhow::{bail, Context, Result};
@@ -57,6 +58,9 @@ pub struct NewArgs {
 // Claude's auto-memory at the *source* project below, so memories accrue
 // against the long-lived repo rather than the short-lived workspace.
 pub fn run(args: NewArgs, launch: LaunchOptions) -> Result<i32> {
+    // Resolve config precedence and validate before creating the workspace, so
+    // a bad namespace cannot leave a worktree behind after a failed launch.
+    let state_namespace = state::select(launch.state.as_deref())?;
     let NewArgs {
         name,
         source: source_opt,
@@ -191,6 +195,7 @@ pub fn run(args: NewArgs, launch: LaunchOptions) -> Result<i32> {
         memory_from: source.display().to_string(),
         extra_mounts: launch.extra_mounts,
         instance: discriminator,
+        state: state_namespace,
         ephemeral_name: if ephemeral {
             name.clone()
         } else {

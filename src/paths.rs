@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 pub const CONTAINER_HOME: &str = "/root";
 pub const IMAGE_NAME_DEFAULT: &str = "maudebox";
-pub const STATE_VOLUME: &str = "maudebox-state";
 
 pub fn home() -> Result<PathBuf> {
     let h = std::env::var("HOME").context("HOME is not set")?;

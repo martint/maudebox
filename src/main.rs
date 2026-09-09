@@ -12,6 +12,7 @@ mod manifest;
 mod mount;
 mod paths;
 mod resolve;
+mod state;
 mod tmux;
 mod vcs;
 mod volume;
@@ -35,12 +36,15 @@ const EXAMPLES: &str = "Examples:
   maudebox . mvnd verify                 # run a build
   maudebox . claude                      # start Claude Code
   maudebox --instance review . claude    # second session on same repo (distinct $MAUDEBOX_INSTANCE)
+  maudebox --state work . claude          # use an independent login/session namespace
   maudebox new feature-x                 # new workspace from cwd (kept on exit)
   maudebox new feature-x --source trino  # new workspace from another project
   maudebox new feature-x --from main     # start from a specific revision
   maudebox new feature-x --ephemeral     # tear down workspace/volumes on exit
   maudebox new feature-x mvnd verify     # spawn workspace, run a build in it
   maudebox list                          # list maudebox projects
+  maudebox state list                    # list persistent state namespaces
+  maudebox state rm work                 # forget a namespace's credentials and sessions
   maudebox keep feature-x                # don't tear down on exit
   maudebox rm feature-x                  # full teardown of a project
   maudebox rm /path/to/myproject         # remove volumes + state for a path
@@ -90,6 +94,12 @@ struct Cli {
     /// project path, so the two sessions share Maven cache state.
     #[arg(long, value_name = "NAME")]
     instance: Option<String>,
+
+    /// Persistent state namespace for agent logins, sessions, gh, SSH, and
+    /// opencode. CLI selection overrides `state` in the user config; the
+    /// default namespace preserves the existing `maudebox-state` volume.
+    #[arg(long, value_name = "NAME")]
+    state: Option<String>,
 
     /// Docker network for the container to join at launch (passed to
     /// `docker run --network`). Repeatable to join several networks. Use
@@ -153,6 +163,9 @@ enum Command {
     /// Open or locate the user config file.
     Config(cmd::config::ConfigArgs),
 
+    /// List or remove persistent state namespaces.
+    State(cmd::state::StateArgs),
+
     /// (default) Launch a container. First positional is the project dir,
     /// the rest is the container command.
     #[command(external_subcommand)]
@@ -181,6 +194,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
         memory_from,
         mount,
         instance,
+        state,
         network,
         fuse,
         command,
@@ -190,6 +204,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
         memory_from,
         extra_mounts: mount,
         instance,
+        state,
         network,
         fuse,
     };
@@ -208,6 +223,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
         Some(Command::Mount(args)) => cmd::mount::run(args.action),
         Some(Command::Alias(args)) => cmd::alias::run(args.action),
         Some(Command::Config(args)) => cmd::config::run(args.action),
+        Some(Command::State(args)) => cmd::state::run(args.action),
         Some(Command::New(args)) => cmd::new::run(args, launch),
     }
 }
@@ -222,6 +238,7 @@ fn default_run(
         memory_from: launch.memory_from.unwrap_or_default(),
         extra_mounts: launch.extra_mounts,
         instance: launch.instance.unwrap_or_default(),
+        state: launch.state.unwrap_or_default(),
         ephemeral_name: String::new(),
         network: launch.network,
         fuse: launch.fuse,
@@ -264,5 +281,24 @@ mod tests {
             }
             _ => panic!("expected new command"),
         }
+    }
+
+    #[test]
+    fn state_selector_applies_to_direct_and_new_launches() {
+        let direct = Cli::try_parse_from(["maudebox", "--state", "work", "."]).unwrap();
+        assert_eq!(direct.state.as_deref(), Some("work"));
+
+        let new =
+            Cli::try_parse_from(["maudebox", "--state", "personal", "new", "feature"]).unwrap();
+        assert_eq!(new.state.as_deref(), Some("personal"));
+        assert!(matches!(new.command, Some(Command::New(_))));
+
+        let management = Cli::try_parse_from(["maudebox", "state", "rm", "work"]).unwrap();
+        assert!(matches!(
+            management.command,
+            Some(Command::State(cmd::state::StateArgs {
+                action: cmd::state::StateAction::Rm { name }
+            })) if name == "work"
+        ));
     }
 }

@@ -15,6 +15,7 @@ struct ContainerRow {
     project: String,
     instance: String,
     ephemeral: String,
+    state: String,
 }
 
 // A row is a *project*: the worktree path plus whatever maudebox keeps for it
@@ -33,7 +34,7 @@ struct ContainerRow {
 // create` never relabels — owned the project.
 pub fn run() -> Result<i32> {
     let vol_fmt = "{{.Name}}\t{{.Label \"maudebox.project\"}}";
-    let ps_fmt = "{{.Label \"maudebox.project\"}}\t{{.Label \"maudebox.instance\"}}\t{{.Label \"maudebox.ephemeral\"}}";
+    let ps_fmt = "{{.Label \"maudebox.project\"}}\t{{.Label \"maudebox.instance\"}}\t{{.Label \"maudebox.ephemeral\"}}\t{{.Label \"maudebox.state\"}}";
 
     let ps_out = docker::capture(&[
         "ps",
@@ -113,13 +114,7 @@ pub fn run() -> Result<i32> {
             "false".into()
         };
 
-        let instances = if here.is_empty() {
-            "-".to_string()
-        } else {
-            let mut names: Vec<&str> = here.iter().map(|r| r.instance.as_str()).collect();
-            names.sort_unstable();
-            names.join(", ")
-        };
+        let instances = format_instances(&here);
 
         rows.push(vec![
             if here.is_empty() {
@@ -137,6 +132,25 @@ pub fn run() -> Result<i32> {
 
     print_table(&rows);
     Ok(0)
+}
+
+fn format_instances(rows: &[&ContainerRow]) -> String {
+    if rows.is_empty() {
+        return "-".to_string();
+    }
+    let mut names: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            let state = if r.state.is_empty() {
+                crate::state::DEFAULT_NAMESPACE
+            } else {
+                &r.state
+            };
+            format!("{} [{state}]", r.instance)
+        })
+        .collect();
+    names.sort_unstable();
+    names.join(", ")
 }
 
 fn parse_volume_rows(out: &str) -> Vec<VolumeRow> {
@@ -161,6 +175,7 @@ fn parse_container_rows(out: &str) -> Vec<ContainerRow> {
                 project: it.next().unwrap_or("").to_string(),
                 instance: it.next().unwrap_or("").to_string(),
                 ephemeral: it.next().unwrap_or("").to_string(),
+                state: it.next().unwrap_or("").to_string(),
             }
         })
         .collect()
@@ -199,7 +214,7 @@ mod tests {
     #[test]
     fn concurrent_instances_share_one_project_row() {
         let rows = parse_container_rows(
-            "/src/trino\ttrino\tfalse\n/src/trino\ttrino-review\tfalse\n/src/other\tother\tfalse\n",
+            "/src/trino\ttrino\tfalse\tdefault\n/src/trino\ttrino-review\tfalse\twork\n/src/other\tother\tfalse\tdefault\n",
         );
         let here: Vec<&str> = rows
             .iter()
@@ -207,6 +222,18 @@ mod tests {
             .map(|r| r.instance.as_str())
             .collect();
         assert_eq!(here, ["trino", "trino-review"]);
+        assert_eq!(rows[1].state, "work");
+        let trino: Vec<&ContainerRow> = rows
+            .iter()
+            .filter(|row| row.project == "/src/trino")
+            .collect();
+        assert_eq!(
+            format_instances(&trino),
+            "trino [default], trino-review [work]"
+        );
+
+        let legacy = parse_container_rows("/src/old\told\tfalse\t\n");
+        assert_eq!(format_instances(&[&legacy[0]]), "old [default]");
     }
 
     // Only overlay volumes feed the OVERLAYS count; any other project-labelled

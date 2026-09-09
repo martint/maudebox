@@ -4,7 +4,8 @@ use crate::config::{
 };
 use crate::docker;
 use crate::mount::{build_mount_plan, parse_mount_spec, Mode, MountPlan};
-use crate::paths::{canonicalize, expand_container_tilde, home, xdg_state_home, STATE_VOLUME};
+use crate::paths::{canonicalize, expand_container_tilde, home, xdg_state_home};
+use crate::state;
 use crate::vcs::detect_vcs_base;
 use crate::volume::{compute_overlay_volume, compute_state_dir};
 use anyhow::{bail, Context, Result};
@@ -20,6 +21,7 @@ pub struct LaunchOptions {
     pub memory_from: Option<String>,
     pub extra_mounts: Vec<String>,
     pub instance: Option<String>,
+    pub state: Option<String>,
     pub network: Vec<String>,
     pub fuse: bool,
 }
@@ -32,6 +34,8 @@ pub struct RunOptions {
     /// `MAUDEBOX_INSTANCE` and the `maudebox.instance` label. Empty = no
     /// suffix (just basename). See `--instance` on the CLI.
     pub instance: String,
+    /// Persistent state namespace. Empty = config value, then `default`.
+    pub state: String,
     pub ephemeral_name: String,
     /// Docker networks to join at launch (`docker run --network`, one flag
     /// each). Empty = fall back to the config-file `network` key, else
@@ -62,11 +66,16 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     let command = resolve_alias(command)?;
     let vcs_base = detect_vcs_base(&project_dir);
 
-    // ── persistent state (maudebox-state volume + read-only host overlays) ──
-    docker::ensure_volume(STATE_VOLUME, &[])?;
+    // Resolve and validate the state namespace before the first Docker call.
+    // A CLI value wins over config; `default` maps to the legacy volume.
+    let requested_state = (!opts.state.is_empty()).then_some(opts.state.as_str());
+    let state_namespace = state::select(requested_state)?;
+    let state_volume = state::ensure_volume(&state_namespace)?;
+
+    // ── persistent state (selected volume + read-only host overlays) ───────
     docker::ensure_subpaths(
         &opts.image,
-        STATE_VOLUME,
+        &state_volume,
         &[
             "claude",
             "codex",
@@ -81,14 +90,13 @@ pub fn run(opts: RunOptions) -> Result<i32> {
 
     let mut claude_mounts: Vec<String> = vec![
         "--mount".into(),
-        format!("type=volume,src={STATE_VOLUME},dst=/root/.claude,volume-subpath=claude"),
+        format!("type=volume,src={state_volume},dst=/root/.claude,volume-subpath=claude"),
         "--mount".into(),
-        format!("type=volume,src={STATE_VOLUME},dst=/root/.config/gh,volume-subpath=gh"),
-        // A container-only ~/.ssh shared across all maudebox instances — keys
-        // generated/added inside one container are reused by the next. The
-        // host's ~/.ssh is deliberately never mounted; this is separate.
+        format!("type=volume,src={state_volume},dst=/root/.config/gh,volume-subpath=gh"),
+        // A container-only ~/.ssh shared within the selected state namespace.
+        // The host's ~/.ssh is deliberately never mounted; this is separate.
         "--mount".into(),
-        format!("type=volume,src={STATE_VOLUME},dst=/root/.ssh,volume-subpath=ssh"),
+        format!("type=volume,src={state_volume},dst=/root/.ssh,volume-subpath=ssh"),
     ];
     let h = home()?;
     let host_claude_dir = h.join(".claude");
@@ -131,7 +139,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         host_memory_dir.display()
     ));
 
-    // ── Codex state (maudebox-state subpath) + read-only host config ───────
+    // ── Codex state (selected-volume subpath) + read-only host config ─────
     // Codex keeps auth.json, config.toml, sessions, and its SQLite state DB
     // under $CODEX_HOME (=/root/.codex in the image), so the shared subpath
     // persists login and history across containers — same arrangement as
@@ -143,7 +151,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     // read-only so host config is picked up without host-path-keyed state.
     let mut codex_mounts: Vec<String> = vec![
         "--mount".into(),
-        format!("type=volume,src={STATE_VOLUME},dst=/root/.codex,volume-subpath=codex"),
+        format!("type=volume,src={state_volume},dst=/root/.codex,volume-subpath=codex"),
     ];
     let codex_agents_md = h.join(".codex").join("AGENTS.md");
     if codex_agents_md.exists() {
@@ -162,13 +170,13 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         ));
     }
 
-    // ── opencode state (maudebox-state subpaths) + read-only host config ───
+    // ── opencode state (selected-volume subpaths) + read-only host config ──
     // Unlike Claude and Codex, opencode spreads its state over four XDG
     // directories rather than one home under $HOME: config, data (auth.json,
     // the SQLite DB, logs, per-repo state), state (the locks that serialize
     // access to that DB, keyed to the data dir — so they belong with it) and
     // cache (LSP servers it downloads on demand). All four are subpaths of the
-    // shared state volume, so they persist across containers and worktrees.
+    // selected state volume, so they persist within that namespace.
     //
     // Nothing under data/ is bound from the host, deliberately: opencode's
     // credentials inside the container stay separate from any the host user
@@ -186,7 +194,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     ] {
         opencode_mounts.push("--mount".into());
         opencode_mounts.push(format!(
-            "type=volume,src={STATE_VOLUME},dst={dst},volume-subpath=opencode/{subpath}"
+            "type=volume,src={state_volume},dst={dst},volume-subpath=opencode/{subpath}"
         ));
     }
     // Hand-authored config from the host, bound read-only over the config
@@ -330,6 +338,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     let mut container_labels: Vec<String> = vec![
         format!("maudebox.instance={instance_name}"),
         format!("maudebox.project={}", project_dir.display()),
+        format!("maudebox.state={state_namespace}"),
     ];
     let mut ephemeral_mount: Vec<String> = Vec::new();
     if !opts.ephemeral_name.is_empty() {
@@ -485,6 +494,7 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     // ── status preamble ────────────────────────────────────────────────────
     println!("Image    : {}", opts.image);
     println!("Worktree : {}", project_dir.display());
+    println!("State    : {state_namespace}");
     if let Some(base) = &vcs_base {
         if base != &project_dir {
             println!("VCS base : {}", base.display());
@@ -550,6 +560,8 @@ pub fn run(opts: RunOptions) -> Result<i32> {
         format!("HOST_PROJECT_DIR={}", project_dir.display()),
         "-e".into(),
         format!("MAUDEBOX_INSTANCE={instance_name}"),
+        "-e".into(),
+        format!("MAUDEBOX_STATE={state_namespace}"),
     ];
     args.extend(runtime_privilege_args(!overlays.is_empty(), fuse));
     args.extend(network_args);
