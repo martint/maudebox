@@ -9,7 +9,8 @@ use crate::vcs::detect_vcs_base;
 use crate::volume::{compute_overlay_volume, compute_state_dir};
 use anyhow::{bail, Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 /// The top-level CLI flags that apply to any launch, whether it goes straight
 /// to a container (`maudebox <path>`) or through `maudebox new`. Grouped so the
@@ -714,17 +715,33 @@ fn is_valid_alias_name(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-// Serialize `[mcp.NAME]` tables to `{"mcpServers": {...}}` JSON and write
-// atomically to a stable host path. Docker captures the file inode at bind-
-// mount time, so concurrent maudebox launches with different configs each see
-// their own snapshot — atomic rename keeps any already-running container
-// pointing at its original inode.
+// Write one generated agent config atomically. Docker captures the file inode
+// at bind-mount time, so concurrent maudebox launches with different configs
+// each see their own snapshot — rename keeps an already-running container
+// pointing at its original inode, where a rewrite in place would not.
+//
+// Mode 0600: these files carry MCP `headers`/`http_headers` and, in the Codex
+// managed config, a model provider's bearer token, so the process umask is not good enough. The
+// container reads them as the file's owner (the host UID on Linux, root mapped
+// to the host user on OrbStack), so nothing needs group or other access.
+fn write_agent_config(dir: &Path, name: &str, content: &str) -> Result<PathBuf> {
+    let path = dir.join(name);
+    let tmp = dir.join(format!("{name}.tmp.{}", std::process::id()));
+    fs::write(&tmp, content).with_context(|| format!("writing {}", tmp.display()))?;
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("setting mode on {}", tmp.display()))?;
+    fs::rename(&tmp, &path)
+        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+    Ok(path)
+}
+
+// Serialize `[mcp.NAME]` tables to `{"mcpServers": {...}}` JSON, written to a
+// stable host path by write_agent_config.
 fn write_managed_mcp_json(
     servers: &std::collections::BTreeMap<String, toml::Value>,
 ) -> Result<PathBuf> {
     let dir = xdg_state_home()?.join("maudebox");
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = dir.join("managed-mcp.json");
 
     // toml::Value: Serialize and serde_json::Value: Deserialize, so the
     // round-trip lifts TOML straight to JSON. No datetime support is needed
@@ -743,11 +760,7 @@ fn write_managed_mcp_json(
     root.insert("mcpServers".to_string(), serde_json::Value::Object(inner));
     let content = serde_json::to_string_pretty(&serde_json::Value::Object(root))?;
 
-    let tmp = dir.join(format!("managed-mcp.json.tmp.{}", std::process::id()));
-    fs::write(&tmp, content).with_context(|| format!("writing {}", tmp.display()))?;
-    fs::rename(&tmp, &path)
-        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
-    Ok(path)
+    write_agent_config(&dir, "managed-mcp.json", &content)
 }
 
 // Return a copy of a `[mcp.NAME]` server table with `key` removed. Used to
@@ -796,8 +809,7 @@ fn serialize_toml_sections(doc: &toml::map::Map<String, toml::Value>) -> Result<
 }
 
 // Serialize the Codex system config (`/etc/codex/config.toml`) and write it
-// atomically to a stable host path, mirroring write_managed_mcp_json's inode
-// discipline. The file carries two things:
+// to a stable host path via write_agent_config. The file carries two things:
 //
 //   * a sandbox default — the maudebox container already *is* the sandbox, so
 //     Codex's own Landlock/seccomp sandbox and approval prompts are bypassed
@@ -813,7 +825,6 @@ fn write_codex_config_toml(
 ) -> Result<PathBuf> {
     let dir = xdg_state_home()?.join("maudebox");
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = dir.join("codex-config.toml");
 
     let mut doc = toml::map::Map::new();
     doc.insert("sandbox_mode".into(), "danger-full-access".into());
@@ -838,11 +849,7 @@ fn write_codex_config_toml(
     );
     out.push_str(&serialize_toml_sections(&doc)?);
 
-    let tmp = dir.join(format!("codex-config.toml.tmp.{}", std::process::id()));
-    fs::write(&tmp, out).with_context(|| format!("writing {}", tmp.display()))?;
-    fs::rename(&tmp, &path)
-        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
-    Ok(path)
+    write_agent_config(&dir, "codex-config.toml", &out)
 }
 
 // Serialize the user's `[codex]` table to `/etc/codex/managed_config.toml` —
@@ -863,7 +870,6 @@ fn write_codex_config_toml(
 fn write_codex_managed_config_toml(extra: &toml::map::Map<String, toml::Value>) -> Result<PathBuf> {
     let dir = xdg_state_home()?.join("maudebox");
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = dir.join("codex-managed-config.toml");
 
     let mut out = String::from(
         "# Generated by maudebox from the `[codex]` table in its user config —\n\
@@ -872,14 +878,7 @@ fn write_codex_managed_config_toml(extra: &toml::map::Map<String, toml::Value>) 
     );
     out.push_str(&serialize_toml_sections(extra)?);
 
-    let tmp = dir.join(format!(
-        "codex-managed-config.toml.tmp.{}",
-        std::process::id()
-    ));
-    fs::write(&tmp, out).with_context(|| format!("writing {}", tmp.display()))?;
-    fs::rename(&tmp, &path)
-        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
-    Ok(path)
+    write_agent_config(&dir, "codex-managed-config.toml", &out)
 }
 
 // Translate one `[mcp.NAME]` table into Codex's `[mcp_servers.NAME]` shape.
@@ -925,7 +924,7 @@ fn translate_mcp_for_codex(name: &str, val: &toml::Value) -> toml::Value {
 
 // Serialize `[mcp.NAME]` tables into opencode's managed config
 // (`/etc/opencode/opencode.json`) and write it atomically to a stable host
-// path, with the same inode discipline as write_managed_mcp_json.
+// path via write_agent_config.
 //
 // opencode's managed layer outranks every other config source, so — unlike
 // Codex's system layer, which is the lowest — this file holds only the servers.
@@ -936,7 +935,6 @@ fn write_opencode_config_json(
 ) -> Result<PathBuf> {
     let dir = xdg_state_home()?.join("maudebox");
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = dir.join("opencode-config.json");
 
     let mut root = serde_json::Map::new();
     root.insert(
@@ -953,11 +951,7 @@ fn write_opencode_config_json(
     root.insert("mcp".to_string(), serde_json::Value::Object(inner));
     let content = serde_json::to_string_pretty(&serde_json::Value::Object(root))?;
 
-    let tmp = dir.join(format!("opencode-config.json.tmp.{}", std::process::id()));
-    fs::write(&tmp, content).with_context(|| format!("writing {}", tmp.display()))?;
-    fs::rename(&tmp, &path)
-        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
-    Ok(path)
+    write_agent_config(&dir, "opencode-config.json", &content)
 }
 
 // Translate one `[mcp.NAME]` table into opencode's `mcp.NAME` object. opencode
