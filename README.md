@@ -4,10 +4,10 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 
 - Eclipse Temurin JDK 26
 - [`mvnd`](https://github.com/apache/maven-mvnd) (Maven Daemon) — symlinked as both `mvnd` and `mvn`
-- A Rust toolchain (rustup-managed, default 1.98.0) plus `build-essential` for crates with native dependencies
+- A Rust toolchain (rustup-managed, default 1.98.1) plus `build-essential` for crates with native dependencies
 - Python 3 with `pip`, `venv`, and development headers (`python` is symlinked to `python3`)
 - [`bun`](https://bun.sh) and [`pnpm`](https://pnpm.io) for JavaScript/TypeScript work (pnpm bundles its own Node.js; bun is its own runtime)
-- [Playwright](https://playwright.dev) — the `playwright` CLI with Chromium and its OS dependencies preinstalled, plus the [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) server (`playwright-mcp`) so Claude can drive a browser. Both run under `bun` (no Node.js needed); browsers live in a shared system path, so add an `[mcp.playwright]` table pointing at `playwright-mcp` to wire it into Claude Code
+- [Playwright](https://playwright.dev) — the `playwright` CLI and [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) server (`playwright-mcp`), with the Chromium revisions each requires and their OS dependencies preinstalled. Both run under `bun` (no Node.js needed); browsers live in a shared system path, so add an `[mcp.playwright]` table pointing at `playwright-mcp` to wire it into Claude Code
 - `git` and [`jj`](https://github.com/jj-vcs/jj) (Jujutsu VCS)
 - Claude Code CLI
 - [Codex CLI](https://github.com/openai/codex) — OpenAI's coding agent, native binary
@@ -58,7 +58,7 @@ The repo is a Cargo workspace. One tool builds both the host-side wrapper and th
 
 ```sh
 cargo build --release        # wrapper binary at target/release/maudebox
-cargo xtask image            # docker image (defaults: mvnd 1.0.6, jj 0.44.0, tag maudebox)
+cargo xtask image            # docker image (defaults: mvnd 1.0.6, jj 0.45.1, tag maudebox)
 cargo xtask all              # both, in one go
 ```
 
@@ -67,7 +67,7 @@ Downloaded mvnd, jj, rustup, bun, pnpm, and opencode artifacts are checked again
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.6 --jj-version 0.44.0 --rust-version 1.98.0 --bun-version 1.4.0 --pnpm-version 11.22.0 --claude-version 2.1.228 --codex-version 0.154.0 --opencode-version 1.18.21 --playwright-version 1.62.1 --playwright-mcp-version 0.0.79 --tag maudebox
+cargo xtask image --mvnd-version 1.0.6 --jj-version 0.45.1 --rust-version 1.98.1 --bun-version 1.4.2 --pnpm-version 12.6.0 --claude-version 2.1.284 --codex-version 0.158.0 --opencode-version 1.18.33 --playwright-version 1.63.0 --playwright-mcp-version 0.0.82 --tag maudebox
 ```
 
 ## Run
@@ -292,12 +292,12 @@ DEBUG = "1"
 
 # The bundled Playwright MCP server (lets Claude drive the preinstalled Chromium).
 # Omitting --browser uses Playwright's bundled Chromium (the one preinstalled);
-# --headless because the container has no display, --no-sandbox because it's
-# already sandboxed:
+# --browser chromium selects the bundled browser, --headless because the
+# container has no display, --no-sandbox because it's already sandboxed:
 [mcp.playwright]
 type = "stdio"
 command = "playwright-mcp"
-args = ["--headless", "--no-sandbox"]
+args = ["--browser", "chromium", "--headless", "--no-sandbox"]
 ```
 
 A single `[mcp.NAME]` table drives **all three** bundled agents. For Claude Code, `maudebox` serializes the tables to `$XDG_STATE_HOME/maudebox/managed-mcp.json` and bind-mounts them read-only at `/etc/claude-code/managed-mcp.json` (**managed scope** — every session loads them, they show up in `claude mcp list`, no `claude mcp add` needed). The field set is passed through verbatim (validation is Claude's job); see Claude Code's MCP docs for the fields (`type`, `url`, `command`, `args`, `env`, `headers`, …).

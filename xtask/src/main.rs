@@ -11,15 +11,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const DEFAULT_MVND_VERSION: &str = "1.0.6";
-const DEFAULT_JJ_VERSION: &str = "0.44.0";
-const DEFAULT_RUST_VERSION: &str = "1.98.0";
-const DEFAULT_BUN_VERSION: &str = "1.4.0";
-const DEFAULT_PNPM_VERSION: &str = "11.22.0";
-const DEFAULT_CLAUDE_VERSION: &str = "2.1.228";
-const DEFAULT_CODEX_VERSION: &str = "0.154.0";
-const DEFAULT_OPENCODE_VERSION: &str = "1.18.21";
-const DEFAULT_PLAYWRIGHT_VERSION: &str = "1.62.1";
-const DEFAULT_PLAYWRIGHT_MCP_VERSION: &str = "0.0.79";
+const DEFAULT_JJ_VERSION: &str = "0.45.1";
+const DEFAULT_RUST_VERSION: &str = "1.98.1";
+const DEFAULT_BUN_VERSION: &str = "1.4.2";
+const DEFAULT_PNPM_VERSION: &str = "12.6.0";
+const DEFAULT_CLAUDE_VERSION: &str = "2.1.284";
+const DEFAULT_CODEX_VERSION: &str = "0.158.0";
+const DEFAULT_OPENCODE_VERSION: &str = "1.18.33";
+const DEFAULT_PLAYWRIGHT_VERSION: &str = "1.63.0";
+const DEFAULT_PLAYWRIGHT_MCP_VERSION: &str = "0.0.82";
 const DEFAULT_TAG: &str = "maudebox";
 
 const USAGE: &str = "\
@@ -32,15 +32,15 @@ Subcommands:
 
 Options for `image` and `all`:
   --mvnd-version VERSION    default: 1.0.6
-  --jj-version VERSION      default: 0.44.0
-  --rust-version VERSION    default: 1.98.0
-  --bun-version VERSION     default: 1.4.0
-  --pnpm-version VERSION    default: 11.22.0
-  --claude-version VERSION  default: 2.1.228
-  --codex-version VERSION   default: 0.154.0
-  --opencode-version VERSION        default: 1.18.21
-  --playwright-version VERSION      default: 1.62.1
-  --playwright-mcp-version VERSION  default: 0.0.79
+  --jj-version VERSION      default: 0.45.1
+  --rust-version VERSION    default: 1.98.1
+  --bun-version VERSION     default: 1.4.2
+  --pnpm-version VERSION    default: 12.6.0
+  --claude-version VERSION  default: 2.1.284
+  --codex-version VERSION   default: 0.158.0
+  --opencode-version VERSION        default: 1.18.33
+  --playwright-version VERSION      default: 1.63.0
+  --playwright-mcp-version VERSION  default: 0.0.82
   --tag TAG                 default: maudebox
 ";
 

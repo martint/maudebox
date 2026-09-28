@@ -2,15 +2,15 @@
 FROM eclipse-temurin:26-jdk-noble
 
 ARG MVND_VERSION=1.0.6
-ARG JJ_VERSION=0.44.0
-ARG RUST_VERSION=1.98.0
-ARG BUN_VERSION=1.4.0
-ARG PNPM_VERSION=11.22.0
-ARG CLAUDE_VERSION=2.1.228
-ARG CODEX_VERSION=0.154.0
-ARG OPENCODE_VERSION=1.18.21
-ARG PLAYWRIGHT_VERSION=1.62.1
-ARG PLAYWRIGHT_MCP_VERSION=0.0.79
+ARG JJ_VERSION=0.45.1
+ARG RUST_VERSION=1.98.1
+ARG BUN_VERSION=1.4.2
+ARG PNPM_VERSION=12.6.0
+ARG CLAUDE_VERSION=2.1.284
+ARG CODEX_VERSION=0.158.0
+ARG OPENCODE_VERSION=1.18.33
+ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_MCP_VERSION=0.0.82
 
 # The container starts as root for the privileged setup (overlay mount, volume
 # chowns) and on Linux drops to the host UID before exec'ing the user command —
@@ -334,7 +334,7 @@ RUN set -eux; \
         aarch64) RUST_ARCH="aarch64-unknown-linux-gnu" ;; \
         *)       echo "Unsupported arch: $ARCH" && exit 1 ;; \
     esac; \
-    RUSTUP_VERSION="1.29.0"; \
+    RUSTUP_VERSION="1.29.1"; \
     curl --proto '=https' --tlsv1.2 -fsSL \
         "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${RUST_ARCH}/rustup-init" \
         -o /tmp/rustup-init \
@@ -435,8 +435,10 @@ ENV PATH=/root/.bun/bin:/opt/bun/bin:/root/.local/share/pnpm:$PATH
 #
 # Browsers install into a system path (PLAYWRIGHT_BROWSERS_PATH) rather than the
 # per-user default under ~/.cache, so they sit outside any volume or overlay and
-# every worktree shares one read-only Chromium instead of re-downloading per
-# container. `--with-deps` apt-installs Chromium's shared libraries (we're still
+# every worktree shares the installed Chromium revisions instead of re-downloading
+# per container. The CLI and MCP can depend on different Playwright versions, so
+# install Chromium through each package's own CLI; matching revisions are reused.
+# `--with-deps` apt-installs Chromium's shared libraries (we're still
 # root at build time). Only Chromium is bundled; run `playwright install firefox
 # webkit` by hand if you need the others. Chromium ships native amd64 and arm64
 # builds, so no `uname -m` branching is needed — Playwright fetches the build
@@ -455,6 +457,9 @@ RUN set -eux; \
     done; \
     chmod -R a+rX "$BUN_INSTALL"; \
     playwright install --with-deps chromium; \
+    mcp_playwright_cli="$(bun -e 'const path = require("node:path"); console.log(path.join(path.dirname(require.resolve("playwright/package.json", { paths: [process.argv[1]] })), "cli.js"));' \
+        "$BUN_INSTALL/install/global/node_modules/@playwright/mcp")"; \
+    bun "$mcp_playwright_cli" install --with-deps chromium; \
     chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"; \
     rm -rf /var/lib/apt/lists/*
 

@@ -19,6 +19,12 @@ host project. It packages a Java and Rust development toolchain, JavaScript
 package managers, Git and Jujutsu, browser automation, and the Claude Code,
 Codex, and opencode coding agents into one image.
 
+Browser automation includes the Playwright CLI and its MCP server, with the
+Chromium revision required by each preinstalled in the image. Configure the MCP
+server with `--browser chromium` to select the bundled browser. The CLI and MCP
+may require different revisions; both must work without downloading a browser
+at runtime when using bundled Chromium.
+
 Its premise is that coding agents should be given a useful development machine
 without being given the user's whole machine. A Maudebox container can edit the
 selected project, use its real version-control metadata, download dependencies,
