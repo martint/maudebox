@@ -134,7 +134,8 @@ The container receives:
 - the selected project and any required VCS base, read-write;
 - the host Maven artifact repository at the dedicated shared-cache path,
   read-write;
-- narrow read-only host configuration mounts documented in §7 and §8;
+- narrow host configuration mounts documented in §6.4, §7, and §8, read-only
+  except for the shared agent memory directory of §8.4;
 - paths explicitly requested through `--mount` or user configuration;
 - Docker networks explicitly selected through `--network` or configuration;
 - `/dev/fuse` and broad mount privileges only when FUSE or an overlay mount
@@ -219,6 +220,23 @@ Artifacts installed from the current build go to a separate `local-installs`
 prefix in the container layer and disappear with the container. This prevents
 two worktrees from publishing different content to one shared Maven coordinate.
 Maven settings and credentials elsewhere under host `~/.m2` are not mounted.
+
+### 6.4 Version-control configuration
+
+The host's Git and Jujutsu configuration is mounted read-only so the user's
+identity, aliases, ignore rules, and revset aliases apply inside the container:
+`~/.gitconfig`, `~/.config/git/`, and `~/.config/jj/config.toml`. Jujutsu's
+configuration is mounted as that single file rather than the whole directory,
+because the rest of it holds per-repository state keyed by host paths.
+
+Authentication and signing material — `~/.ssh/`, `~/.git-credentials`, and
+`~/.gnupg/` — is not mounted. Commit and tag signing is therefore forced off
+inside the container at a precedence that overrides the mounted user
+configuration, so a host configuration that signs by default does not fail
+every container commit. Commits made in a container are unsigned.
+
+The interactive shell prompt reports the current Jujutsu change and nearest
+bookmark, or the Git branch, for the directory it is in.
 
 ## 7. Persistent identity and state
 
@@ -338,6 +356,24 @@ Maudebox does not publish ports automatically. An opencode server is reachable
 from the host only where the host container runtime routes container addresses,
 and from other containers only on a shared Docker network. Exposure to another
 machine requires networking outside Maudebox's current interface.
+
+### 8.4 Agent memory
+
+Claude Code's automatic project memory is shared read-write with the host, so
+memories written inside a container are visible on the host and memories written
+on the host are visible inside. The shared directory is selected by the project's
+own path, which is identical inside and outside the container.
+
+`--memory-from PATH` selects another project's memory directory for the launch.
+Memories then accrue against that project rather than the launched one.
+`maudebox new` applies this automatically, pointing a new workspace at its source
+project so short-lived workspaces do not scatter memory into per-workspace
+directories.
+
+Codex has no separate memory store: its `AGENTS.md` serves that purpose and is
+mounted read-only like other global instructions, so there is no equivalent
+override. Session transcripts are not memory and stay in the selected state
+namespace.
 
 ## 9. Networking and FUSE
 
