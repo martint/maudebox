@@ -100,19 +100,24 @@ pub fn run(opts: RunOptions) -> Result<i32> {
     ];
     let h = home()?;
     let host_claude_dir = h.join(".claude");
-    for p in [
-        "CLAUDE.md",
-        "settings.json",
-        "agents",
-        "commands",
-        "skills",
-        "plugins",
-    ] {
+    for p in ["CLAUDE.md", "agents", "commands", "skills", "plugins"] {
         let host_path = host_claude_dir.join(p);
         if host_path.exists() {
             claude_mounts.push("-v".into());
             claude_mounts.push(format!("{}:/root/.claude/{p}:ro", host_path.display()));
         }
+    }
+    // Claude writes settings.json when commands such as `/model` change a
+    // preference. Keep the host copy as a read-only bootstrap source, rather
+    // than mounting it over the writable namespace state. The entrypoint
+    // copies it only when this namespace has no settings file yet.
+    let host_claude_settings = host_claude_dir.join("settings.json");
+    if host_claude_settings.exists() {
+        claude_mounts.push("-v".into());
+        claude_mounts.push(format!(
+            "{}:/root/.maudebox-host-claude-settings.json:ro",
+            host_claude_settings.display()
+        ));
     }
 
     // Auto-memory: bind-mount the host's projects/<key>/memory rw so memories

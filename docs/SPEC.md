@@ -325,9 +325,12 @@ Image rebuilds control upgrades; bundled agents do not silently replace their
 installed versions.
 
 Project-level instruction files come from the mounted project. Selected global
-instructions, skills, commands, plugins, and settings are mounted read-only
-from the host. Credential-bearing configuration and host-path-keyed session
-state are excluded.
+instructions, skills, commands, and plugins are mounted read-only from the
+host. Host Claude settings are copied once into the selected writable Claude
+state namespace when that namespace has no settings file. This lets Claude
+persist preferences such as `/model` without giving the container write access
+to the host settings file. Credential-bearing configuration and host-path-keyed
+session state are excluded.
 
 ### 8.1 Shared MCP servers
 

@@ -52,3 +52,4 @@ header rather than changing status.
 |---|---|---|
 | [0001](0001-record-decisions.md) | Record decisions in this repository | accepted |
 | [0002](0002-state-namespaces-use-separate-volumes.md) | State namespaces use separate volumes | accepted |
+| [0003](0003-claude-settings-seed-into-state.md) | Seed Claude settings into writable state | accepted |

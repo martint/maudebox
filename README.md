@@ -43,7 +43,7 @@ The shared cache is intentionally RW: a process in the container can modify or d
 
 ### Shared logins and global config
 
-As a convenience, the host's global Claude config (`CLAUDE.md`, `settings.json`, `agents/`, `commands/`, `skills/`, `plugins/`), Codex config (`~/.codex/AGENTS.md`, `~/.agents/skills/`) and opencode config (`~/.config/opencode/`'s `AGENTS.md`, `agent/`, `command/`, `skill/`, …) are bind-mounted read-only. Login state for Claude, Codex, opencode, and the GitHub CLI — plus any SSH keys you generate inside a container — is kept in a selected persistent state namespace. Log in once to each inside a namespace (`claude`, `codex login`, `opencode auth login`, `gh auth login`); future launches using it are already logged in. Those logins stay inside the containers: no agent's credential store is mounted from the host.
+As a convenience, the host's global Claude config (`CLAUDE.md`, `agents/`, `commands/`, `skills/`, `plugins/`), Codex config (`~/.codex/AGENTS.md`, `~/.agents/skills/`) and opencode config (`~/.config/opencode/`'s `AGENTS.md`, `agent/`, `command/`, `skill/`, …) are bind-mounted read-only. Host Claude `settings.json` is used as a read-only initial seed for each state namespace, then the namespace owns its writable copy. Login state for Claude, Codex, opencode, and the GitHub CLI — plus any SSH keys you generate inside a container — is kept in a selected persistent state namespace. Log in once to each inside a namespace (`claude`, `codex login`, `opencode auth login`, `gh auth login`); future launches using it are already logged in. Those logins stay inside the containers: no agent's credential store is mounted from the host.
 
 ## Prerequisites
 
@@ -475,7 +475,7 @@ maudebox-overlay-<basename>-<8-char-hash>
 
 Each state namespace is a Docker volume holding writable state across launches that select it, with isolated subtrees mounted at the canonical paths each tool expects:
 
-- `claude/` → `/root/.claude` (Claude login, plugin caches)
+- `claude/` → `/root/.claude` (Claude login, settings, plugin caches)
 - `codex/` → `/root/.codex` (Codex login, `config.toml`, sessions, state DB — `$CODEX_HOME`)
 - `gh/` → `/root/.config/gh` (`gh auth` token, config)
 - `ssh/` → `/root/.ssh` (SSH keys, `known_hosts`)
@@ -493,10 +493,16 @@ The `ssh/` subtree is a **container-only** `~/.ssh`, distinct from the host's (w
 On top of the `claude/` subtree, the following items from the host's `~/.claude/` are bind-mounted read-only (only those that actually exist on the host):
 
 - `CLAUDE.md` — your global instructions
-- `settings.json`
 - `agents/`
 - `commands/`
 - `plugins/`
+
+The host's `settings.json`, when present, is mounted at a private bootstrap
+path. On the first launch using a namespace, the entrypoint copies it into the
+namespace's writable `claude/` subtree. Existing namespace settings are never
+overwritten, so `/model` and other Claude preference changes persist there.
+Changing the host file affects new namespaces only; edit the namespace copy or
+remove the namespace when an existing namespace needs to be reseeded.
 
 Items that are keyed to host paths or are session-only state (`projects/`, `todos/`, `statsig/`, `shell-snapshots/`) are intentionally **not** mounted.
 

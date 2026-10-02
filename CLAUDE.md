@@ -281,9 +281,10 @@ host and so can't ride the volume mount; the entrypoint symlinks
 Read-only, per file or per subdirectory — never a whole agent home dir, which
 would drag in host-path-keyed state:
 
-- **Claude** `~/.claude/`: `CLAUDE.md`, `settings.json`, `agents/`, `commands/`,
-  `skills/`, `plugins/`. Excludes `projects/`, `todos/`, `statsig/`,
-  `shell-snapshots/`.
+- **Claude** `~/.claude/`: `CLAUDE.md`, `agents/`, `commands/`, `skills/`,
+  `plugins/` as read-only mounts. `settings.json` is a read-only bootstrap
+  seed copied into the writable namespace state on first use. Excludes
+  `projects/`, `todos/`, `statsig/`, `shell-snapshots/`.
 - **Codex** (only when present): `~/.codex/AGENTS.md` → `/root/.codex/AGENTS.md`
   and `~/.agents/skills` → `/root/.agents/skills`. `AGENTS.md` is Codex's
   `CLAUDE.md`-equivalent *and* its memory analog — Codex has no separate

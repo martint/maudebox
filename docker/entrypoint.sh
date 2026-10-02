@@ -65,6 +65,18 @@ fi
 # ~/.claude volume so authentication survives container restarts.
 CLAUDE_DIR="$HOME_DIR/.claude"
 if [ -d "$CLAUDE_DIR" ]; then
+    CLAUDE_SETTINGS="$CLAUDE_DIR/settings.json"
+    HOST_CLAUDE_SETTINGS="$HOME_DIR/.maudebox-host-claude-settings.json"
+    if [ ! -e "$CLAUDE_SETTINGS" ] && [ -f "$HOST_CLAUDE_SETTINGS" ]; then
+        # Host settings are a bootstrap snapshot. Once copied, Claude owns the
+        # namespace copy so `/model` and other preference changes persist
+        # without writing back through the container boundary.
+        (umask 077 && cp "$HOST_CLAUDE_SETTINGS" "$CLAUDE_SETTINGS")
+        chmod 0600 "$CLAUDE_SETTINGS"
+        if [ -n "${HOST_UID:-}" ] && [ "${HOST_UID:-0}" != "0" ]; then
+            chown "${HOST_UID}:${HOST_GID:-$HOST_UID}" "$CLAUDE_SETTINGS" 2>/dev/null || true
+        fi
+    fi
     CLAUDE_STATE="$CLAUDE_DIR/state.json"
     if [ ! -s "$CLAUDE_STATE" ]; then
         (umask 077 && echo '{}' > "$CLAUDE_STATE")
