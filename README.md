@@ -4,7 +4,7 @@ A Docker image for working on Maven projects (and adjacent polyglot bits) with [
 
 - Eclipse Temurin JDK 26
 - [`mvnd`](https://github.com/apache/maven-mvnd) (Maven Daemon) — symlinked as both `mvnd` and `mvn`
-- A Rust toolchain (rustup-managed, default 1.98.1) plus `build-essential` for crates with native dependencies
+- A Rust toolchain (rustup-managed, default 1.99.0) plus `build-essential` for crates with native dependencies
 - Python 3 with `pip`, `venv`, and development headers (`python` is symlinked to `python3`)
 - [`bun`](https://bun.sh) and [`pnpm`](https://pnpm.io) for JavaScript/TypeScript work (pnpm bundles its own Node.js; bun is its own runtime)
 - [Playwright](https://playwright.dev) — the `playwright` CLI and [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) server (`playwright-mcp`), with the Chromium revisions each requires and their OS dependencies preinstalled. Both run under `bun` (no Node.js needed); browsers live in a shared system path, so add an `[mcp.playwright]` table pointing at `playwright-mcp` to wire it into Claude Code
@@ -67,7 +67,7 @@ Downloaded mvnd, jj, rustup, bun, pnpm, and opencode artifacts are checked again
 Version pins and tag can be overridden:
 
 ```sh
-cargo xtask image --mvnd-version 1.0.6 --jj-version 0.45.1 --rust-version 1.98.1 --bun-version 1.4.2 --pnpm-version 12.6.0 --claude-version 2.1.284 --codex-version 0.158.0 --opencode-version 1.18.33 --playwright-version 1.63.0 --playwright-mcp-version 0.0.82 --tag maudebox
+cargo xtask image --mvnd-version 1.0.6 --jj-version 0.45.1 --rust-version 1.99.0 --bun-version 1.4.2 --pnpm-version 12.8.1 --claude-version 2.1.288 --codex-version 0.160.0 --opencode-version 1.18.34 --playwright-version 1.63.0 --playwright-mcp-version 0.0.83 --tag maudebox
 ```
 
 ## Run

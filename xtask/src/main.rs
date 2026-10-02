@@ -12,14 +12,14 @@ use std::process::{Command, ExitCode};
 
 const DEFAULT_MVND_VERSION: &str = "1.0.6";
 const DEFAULT_JJ_VERSION: &str = "0.45.1";
-const DEFAULT_RUST_VERSION: &str = "1.98.1";
+const DEFAULT_RUST_VERSION: &str = "1.99.0";
 const DEFAULT_BUN_VERSION: &str = "1.4.2";
-const DEFAULT_PNPM_VERSION: &str = "12.6.0";
-const DEFAULT_CLAUDE_VERSION: &str = "2.1.284";
-const DEFAULT_CODEX_VERSION: &str = "0.158.0";
-const DEFAULT_OPENCODE_VERSION: &str = "1.18.33";
+const DEFAULT_PNPM_VERSION: &str = "12.8.1";
+const DEFAULT_CLAUDE_VERSION: &str = "2.1.288";
+const DEFAULT_CODEX_VERSION: &str = "0.160.0";
+const DEFAULT_OPENCODE_VERSION: &str = "1.18.34";
 const DEFAULT_PLAYWRIGHT_VERSION: &str = "1.63.0";
-const DEFAULT_PLAYWRIGHT_MCP_VERSION: &str = "0.0.82";
+const DEFAULT_PLAYWRIGHT_MCP_VERSION: &str = "0.0.83";
 const DEFAULT_TAG: &str = "maudebox";
 
 const USAGE: &str = "\
@@ -33,14 +33,14 @@ Subcommands:
 Options for `image` and `all`:
   --mvnd-version VERSION    default: 1.0.6
   --jj-version VERSION      default: 0.45.1
-  --rust-version VERSION    default: 1.98.1
+  --rust-version VERSION    default: 1.99.0
   --bun-version VERSION     default: 1.4.2
-  --pnpm-version VERSION    default: 12.6.0
-  --claude-version VERSION  default: 2.1.284
-  --codex-version VERSION   default: 0.158.0
-  --opencode-version VERSION        default: 1.18.33
+  --pnpm-version VERSION    default: 12.8.1
+  --claude-version VERSION  default: 2.1.288
+  --codex-version VERSION   default: 0.160.0
+  --opencode-version VERSION        default: 1.18.34
   --playwright-version VERSION      default: 1.63.0
-  --playwright-mcp-version VERSION  default: 0.0.82
+  --playwright-mcp-version VERSION  default: 0.0.83
   --tag TAG                 default: maudebox
 ";
 
