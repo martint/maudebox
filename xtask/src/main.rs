@@ -12,6 +12,7 @@ use std::process::{Command, ExitCode};
 
 const DEFAULT_MVND_VERSION: &str = "1.0.6";
 const DEFAULT_JJ_VERSION: &str = "0.44.0";
+const DEFAULT_GIT_VERSION: &str = "2.55.0";
 const DEFAULT_RUST_VERSION: &str = "1.98.0";
 const DEFAULT_BUN_VERSION: &str = "1.4.0";
 const DEFAULT_PNPM_VERSION: &str = "11.22.0";
@@ -33,6 +34,7 @@ Subcommands:
 Options for `image` and `all`:
   --mvnd-version VERSION    default: 1.0.6
   --jj-version VERSION      default: 0.44.0
+  --git-version VERSION     default: 2.55.0
   --rust-version VERSION    default: 1.98.0
   --bun-version VERSION     default: 1.4.0
   --pnpm-version VERSION    default: 11.22.0
@@ -76,6 +78,7 @@ fn run(args: &[String]) -> Result<i32, String> {
 struct ImageOpts {
     mvnd_version: String,
     jj_version: String,
+    git_version: String,
     rust_version: String,
     bun_version: String,
     pnpm_version: String,
@@ -91,6 +94,7 @@ fn parse_image_opts(args: &[String]) -> Result<ImageOpts, String> {
     let mut opts = ImageOpts {
         mvnd_version: DEFAULT_MVND_VERSION.into(),
         jj_version: DEFAULT_JJ_VERSION.into(),
+        git_version: DEFAULT_GIT_VERSION.into(),
         rust_version: DEFAULT_RUST_VERSION.into(),
         bun_version: DEFAULT_BUN_VERSION.into(),
         pnpm_version: DEFAULT_PNPM_VERSION.into(),
@@ -117,6 +121,10 @@ fn parse_image_opts(args: &[String]) -> Result<ImageOpts, String> {
             }
             "--jj-version" => {
                 opts.jj_version = val()?;
+                i += 2;
+            }
+            "--git-version" => {
+                opts.git_version = val()?;
                 i += 2;
             }
             "--rust-version" => {
@@ -193,6 +201,7 @@ fn build_image(opts: &ImageOpts) -> Result<i32, String> {
     println!("==> docker build -t {} {}", opts.tag, context.display());
     println!("    mvnd   : {}", opts.mvnd_version);
     println!("    jj     : {}", opts.jj_version);
+    println!("    git    : {}", opts.git_version);
     println!("    rust   : {}", opts.rust_version);
     println!("    bun    : {}", opts.bun_version);
     println!("    pnpm   : {}", opts.pnpm_version);
@@ -207,6 +216,8 @@ fn build_image(opts: &ImageOpts) -> Result<i32, String> {
         .arg(format!("MVND_VERSION={}", opts.mvnd_version))
         .arg("--build-arg")
         .arg(format!("JJ_VERSION={}", opts.jj_version))
+        .arg("--build-arg")
+        .arg(format!("GIT_VERSION={}", opts.git_version))
         .arg("--build-arg")
         .arg(format!("RUST_VERSION={}", opts.rust_version))
         .arg("--build-arg")
