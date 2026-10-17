@@ -3,6 +3,7 @@ FROM eclipse-temurin:26-jdk-noble
 
 ARG MVND_VERSION=1.0.6
 ARG JJ_VERSION=0.44.0
+ARG GIT_VERSION=2.55.0
 ARG RUST_VERSION=1.98.0
 ARG BUN_VERSION=1.4.0
 ARG PNPM_VERSION=11.22.0
@@ -109,7 +110,9 @@ ENV GIT_CONFIG_COUNT=2 \
 # gh ships from GitHub's own apt repo (cli.github.com/packages) which has
 # both amd64 and arm64 debs, so no `uname -m` branching is needed. The repo
 # is set up before the second apt-get update so gh installs in the same
-# transaction as the base packages.
+# transaction as the base packages. git comes from the git-core PPA, since
+# noble's own package is 2.43; the key is fetched by fingerprint and checked
+# against it before being trusted, and the version is pinned via GIT_VERSION.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
@@ -119,11 +122,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chmod a+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         > /etc/apt/sources.list.d/github-cli.list \
+    && GIT_PPA_KEY=F911AB184317630C59970973E363C90F8F1B6217 \
+    && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${GIT_PPA_KEY}" \
+        | gpg --dearmor -o /usr/share/keyrings/git-core-ppa.gpg \
+    && gpg --show-keys --with-colons /usr/share/keyrings/git-core-ppa.gpg | grep -q "^fpr:::::::::${GIT_PPA_KEY}:" \
+    && echo "deb [signed-by=/usr/share/keyrings/git-core-ppa.gpg] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main" \
+        > /etc/apt/sources.list.d/git-core-ppa.list \
     && apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         fuse3 \
         gh \
-        git \
+        git=1:${GIT_VERSION}-* \
         jq \
         less \
         linux-tools-generic \
